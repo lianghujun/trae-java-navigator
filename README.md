@@ -1,6 +1,15 @@
 # Trae Java Navigator
 
 <p align="center">
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.2-2F6FEB?style=flat-square" alt="version"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/server/mcp-server.js"><img src="https://img.shields.io/badge/MCP%20tools-4-2F6FEB?style=flat-square" alt="MCP tools"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/tree/main/skills"><img src="https://img.shields.io/badge/Skill-1-2F6FEB?style=flat-square" alt="skill"/></a>
+  <a href="https://github.com/lianghujun/trae-java-bridge"><img src="https://img.shields.io/badge/platform-Trae%20%7C%20VS%20Code%20%7C%20Cursor-6A5ACD?style=flat-square" alt="platform"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/commits/main"><img src="https://img.shields.io/github/last-commit/lianghujun/trae-java-navigator?style=flat-square&color=green" alt="last commit"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/stargazers"><img src="https://img.shields.io/github/stars/lianghujun/trae-java-navigator?style=flat-square&color=yellow" alt="stars"/></a>
+</p>
+
+<p align="center">
   <b>让 AI 用编译器级精度定位 Java 符号，比 grep + find + read 更快、更准</b><br/>
   符号定位 · 定义/引用 · 实时编译诊断 · 4 个 MCP 工具 · 1 个 Skill
 </p>

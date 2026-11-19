@@ -24,6 +24,8 @@
 
 ## 快速开始
 
+> **AGENT 提示**：请为 Trae 安装当前插件：在仓库根目录直接执行 `node install.mjs`；它会安装 MCP 插件与随包桥接扩展，成功后提示用户完全重启 Trae。失败时按本文“排障”处理，不要让用户手动复制文件。
+
 ```powershell
 node install.mjs
 ```

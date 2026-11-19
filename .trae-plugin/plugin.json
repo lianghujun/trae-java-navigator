@@ -12,21 +12,26 @@
     "jdt",
     "navigation",
     "diagnostics",
-    "mcp"
+    "mcp",
+    "go to definition",
+    "find references",
+    "usages",
+    "workspace symbol",
+    "compile errors"
   ],
   "skills": "./skills/",
   "mcp": ".mcp.json",
   "interface": {
     "displayName": "Java Navigator",
-    "shortDescription": "Find Java symbols and real-time compiler errors",
-    "longDescription": "An MCP server that talks to the Eclipse JDT language server. Agents can find class/method/field locations, jump to definitions, find references, read hovers and query real-time Java diagnostics without running Maven.",
+    "shortDescription": "Java symbols, definitions, references, and live compile errors",
+    "longDescription": "An MCP server that talks to the Eclipse JDT language server. Agents can find class/method/field locations, jump to definitions, find references, read hovers and query real-time Java diagnostics without running Maven. Use it when the declaring file is unknown or exact semantics matter (same-name/overload, real references); Read/Grep are faster for known files, plain text, and non-Java files. Not for renaming/refactoring, call/type/implementation hierarchies, or final build verification.",
     "developerName": "Local",
     "category": "development_tools",
     "capabilities": [
       "Interactive",
       "Read"
     ],
-    "defaultPrompt": "Find the Java symbol I mention and show its real-time compiler errors.",
+    "defaultPrompt": "Find the Java symbol I mention, show its definition/references, and read its real-time compiler errors.",
     "brandColor": "#2F6FEB",
     "logo": "./assets/icon.png",
     "composerIcon": "./assets/icon.png",

@@ -60,8 +60,10 @@ function resolvePluginsRoot() {
 
 function copyDir(from, to) {
   fs.mkdirSync(to, { recursive: true });
+  // 仅开发/社区用的文件不进入插件安装目录
+  const skip = new Set(['node_modules', 'dist', 'bench', 'docs', 'CONTRIBUTING.md', 'CODE_OF_CONDUCT.md', 'SECURITY.md']);
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.endsWith('.zip')) continue;
+    if (skip.has(entry.name) || entry.name.endsWith('.zip')) continue;
     const s = path.join(from, entry.name);
     const d = path.join(to, entry.name);
     if (entry.isDirectory()) copyDir(s, d);

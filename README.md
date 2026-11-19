@@ -74,6 +74,8 @@ trae-java-navigator/             MCP 插件（skills + mcp）
   server/lsp-client.js           ← 兜底：独立 JDT LS
   server/jdtls.js
   skills/java-navigate/SKILL.md  ← 随插件注册，无需单独安装
+  bench/                         ← 基准测试（不随插件发布）
+  docs/bench.md                  ← 测试方法与场景矩阵
 
 trae-java-bridge-extension/     Trae/VS Code 扩展（VSIX 或目录安装）
   extension.js                   ← 调用 vscode.languages / vscode.commands
@@ -148,7 +150,7 @@ Skill 生效确认（仅 Trae）：技能列表中出现 `java-navigate`（随�
 | 工具 | 作用 |
 |---|---|
 | `java_search` | `query`=工作区（支持 `Class#method`）；`class`+`name`=类内定位；`file`+`name`=文件内定位；只给 `file`=文件结构 |
-| `java_navigate` | `action=definition`（含源码行）/ `references` / `hover` |
+| `java_navigate` | `action=definition`（含源码行）/ `references`（默认前 200 条，`limit` 可调，0=全部）/ `hover` |
 | `java_diagnostics` | 给 `file` 查单文件，省略则查整个工作区 |
 | `java_status` | 数据源、索引状态、依赖探测；`warmup=true` 后台启动索引 |
 
@@ -161,7 +163,7 @@ Skill 生效确认（仅 Trae）：技能列表中出现 `java-navigate`（随�
 | 项 | 说明 |
 |---|---|
 | 适用范围 | 仅 Trae CN / Trae 的插件机制会注册 Skill；VS Code / Cursor 无此机制，需手动配置 MCP 并自行说明使用规则 |
-| 作用 | 告诉 AI 何时用、如何用这 4 个工具；规定查找 Java 符号必须先调用 MCP 工具，禁止把 Grep/rg/Read 作为首选 |
+| 作用 | 告诉 AI 何时用、如何用这 4 个工具：按总耗时与结果可信度权衡——不知道符号在哪个文件、需要区分同名/重载或真实引用时用 MCP；已知文件与位置、文本内容、非 Java 文件、工程外/生成源码用 Grep/Read |
 | 触发 | 任务涉及 Java 类/方法/字段定位、定义跳转、引用查找、编译错误排查时自动加载；也可在对话中直接点名 |
 | 边界 | Skill 只提供使用规范，不提供查询能力；数据来自 MCP 工具，因此与插件同启同停 |
 | 确认生效 | 重启 Trae 后技能列表中出现 `java-navigate`；或直接让 AI“用 java-navigate 查找 X 方法” |
@@ -187,7 +189,7 @@ MCP Server 读取该文件并验证 pid/token，然后访问：
 GET /diagnostics?file=&severity=
 GET /symbols?query=&limit=
 GET /definition?file=&line=&column=
-GET /references?file=&line=&column=
+GET /references?file=&line=&column=&limit=
 GET /documentSymbols?file=
 GET /hover?file=&line=&column=
 ```
@@ -256,6 +258,26 @@ IDE 诊断只用于**快速定位**，不能替代编译：
 - **安装脚本自适应**：`install.ps1` / `install-bridge.ps1` 自动探测当前 IDE 的插件/扩展目录，也可用 `-PluginsRoot` / `-ExtensionsRoot` 显式指定。
 - **MCP 入口用相对路径**：`.mcp.json` 固定为 `./server/mcp-server.js`。Trae 以插件版本目录作为 MCP 进程的 cwd，升级换目录（`0.1.1` → `0.2.0`）不会像绝对路径那样失效；安装脚本会校验它保持相对路径。
 
+## 基准测试（bench）
+
+`bench/` 用于对比 MCP / 桥接与 ripgrep 的耗时、输出体积和精度；`bench/` 与 `docs/` 不会被 `install.mjs` 复制进插件目录。方法论、数量级轴、场景矩阵与上下文偏差控制见 [docs/bench.md](./docs/bench.md)。
+
+```bash
+# 1) 生成 10/100/1000 文件规模的合成工程（默认在 %TEMP%\trae-java-bench）
+node bench/generate-fixtures.mjs --scales 10,100,1000
+
+# 2) 跑 rg + 独立 JDT LS（每个 fixture 冷启动，首次就绪时间单独打印）
+node bench/bench.mjs --modes rg,mcp --repeats 10
+
+# 3) 追加真实 IDE 工作区（桥接）对比：同一符号分别测 /symbols、/definition、/references、/diagnostics 与 rg
+node bench/bench.mjs --modes rg,bridge --bridge-workspace <你的Java工程根目录>
+```
+
+- 每个 fixture 使用全新的 JDT 缓存目录，避免上次 Maven 导入失败的状态残留。
+- `rg:list` / `rg:lines` / `rg:verify`（rg 命中后逐文件读取）对应不同的核实成本；`precision` 由合成工程的 ground truth 计算。
+- 结果写入 `<fixtures>/out/report.md` 与 `result.json`。
+- 需要访问 Maven 本地仓库，建议在普通终端（非受限沙箱）运行。
+
 ## 排障
 
 - 一直是 `standalone-jdtls`：确认 `local.trae-java-bridge` 扩展已启用；Reload 后查看 `%TEMP%\trae-java-bridge\` 是否生成文件。
@@ -265,6 +287,12 @@ IDE 诊断只用于**快速定位**，不能替代编译：
 - `java_search` 返回“索引尚未就绪”：兜底模式建索引中；改用桥接或稍后重试。
 - JDT LS 退出并报 `UnsupportedClassVersionError`：插件会自动选择 redhat.java 自带 JRE（21+）。
 - 配置目录只读导致 `AccessDeniedException`：插件会把 `config_win` 复制到可写缓存目录后再启动。
+
+## 贡献与安全
+
+- 开发约定、基准测试与 PR 流程：[CONTRIBUTING.md](./CONTRIBUTING.md)
+- 行为准则：[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- 安全问题与支持版本：[SECURITY.md](./SECURITY.md)
 
 ## 许可证
 

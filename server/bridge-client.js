@@ -122,7 +122,12 @@ async function callBridge(bridge, tool, args) {
     case 'definition':
       return request(bridge, '/definition', { file: args.file, line: args.line, column: args.column });
     case 'references':
-      return request(bridge, '/references', { file: args.file, line: args.line, column: args.column });
+      return request(bridge, '/references', {
+        file: args.file,
+        line: args.line,
+        column: args.column,
+        limit: args.limit,
+      });
     case 'documentSymbols':
       return request(bridge, '/documentSymbols', {
         file: args.file,

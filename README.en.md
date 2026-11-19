@@ -74,6 +74,8 @@ trae-java-navigator/             MCP plugin (skills + mcp)
   server/lsp-client.js           ← fallback: standalone JDT LS
   server/jdtls.js
   skills/java-navigate/SKILL.md  ← registered with the plugin, no separate install
+  bench/                         ← benchmarks (not shipped with the plugin)
+  docs/bench.md                  ← methodology and scenario matrix
 
 trae-java-bridge-extension/     Trae/VS Code extension (VSIX or directory install)
   extension.js                   ← calls vscode.languages / vscode.commands
@@ -265,6 +267,31 @@ In bridge mode, metadata is managed by the IDE's redhat.java under `globalStorag
 - `java_search` reports "index not ready": the fallback is indexing; use the bridge or retry later.
 - JDT LS exits with `UnsupportedClassVersionError`: the plugin automatically picks redhat.java's bundled JRE (21+).
 - `AccessDeniedException` because the config directory is read-only: the plugin copies `config_win` into a writable cache directory before starting.
+
+## Benchmark
+
+`bench/` compares MCP / bridge against ripgrep on latency, output size, and precision. `bench/` and `docs/` are excluded from plugin packaging by `install.mjs`. Methodology, scale axes, scenario matrix, and context-bias controls: [docs/bench.md](./docs/bench.md) (Chinese).
+
+```bash
+# 1) Generate 10/100/1000-file synthetic projects (defaults to %TEMP%\trae-java-bench)
+node bench/generate-fixtures.mjs --scales 10,100,1000
+
+# 2) Run rg + standalone JDT LS (cold start per fixture; init time is printed separately)
+node bench/bench.mjs --modes rg,mcp --repeats 10
+
+# 3) Add a real IDE workspace (bridge): measures /symbols, /definition, /references, /diagnostics alongside rg
+node bench/bench.mjs --modes rg,bridge --bridge-workspace /path/to/java-project
+```
+
+- `rg:list` / `rg:lines` / `rg:verify` (rg then read each hit) represent different verification costs; `precision` comes from fixture ground truth.
+- Reports are written to `<fixtures>/out/report.md` and `result.json`.
+- Maven local repository access is required; prefer a normal terminal rather than a restricted sandbox.
+
+## Contributing & Security
+
+- Development, benchmark, and PR workflow: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- Security policy and supported versions: [SECURITY.md](./SECURITY.md)
 
 ## License
 

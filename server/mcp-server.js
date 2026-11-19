@@ -452,9 +452,22 @@ async function definition(args) {
   };
 }
 
+function referenceLimit(args) {
+  // 默认 200 条，limit<=0 表示全部；大仓库引用可能上千条，必须可收窄
+  const n = Number(args && args.limit);
+  if (Number.isFinite(n)) return n > 0 ? n : 0;
+  return 200;
+}
+
 async function references(args) {
-  const bridged = await viaBridge('references', args);
-  if (bridged) return bridged;
+  const limit = referenceLimit(args);
+  const bridged = await viaBridge('references', { ...args, limit: limit > 0 ? limit : undefined });
+  if (bridged) {
+    const all = bridged.items || [];
+    const items = limit > 0 ? all.slice(0, limit) : all;
+    const total = Number.isFinite(bridged.count) ? bridged.count : all.length;
+    return { ...bridged, count: total, returned: items.length, truncated: items.length < total || bridged.truncated === true, items };
+  }
   const file = absoluteFile(args.file);
   const uri = await ensureOpen(file);
   const lsp = await getClient();
@@ -463,8 +476,9 @@ async function references(args) {
     position: toPosition(args.line, args.column),
     context: { includeDeclaration: args.includeDeclaration !== false },
   }, 60000);
-  const items = normalizeLocations(result);
-  return { count: items.length, items };
+  const all = normalizeLocations(result);
+  const items = limit > 0 ? all.slice(0, limit) : all;
+  return { count: all.length, returned: items.length, truncated: items.length < all.length, items };
 }
 
 function filterSymbols(items, args) {
@@ -784,10 +798,12 @@ async function javaNavigate(args) {
   if (action === 'definition') return { action, ...(await definition(a)) };
   if (action === 'references') {
     const r = await references(a);
+    const summary = (r.items || []).map((i) => `${i.file}:${i.line}:${i.column}`).join('\n')
+      + (r.truncated ? `\n… 已截断，共 ${r.count} 条（limit=${a.limit == null ? 200 : a.limit}）` : '');
     return {
       action,
       ...r,
-      summary: (r.items || []).map((i) => `${i.file}:${i.line}:${i.column}`).join('\n'),
+      summary,
     };
   }
   if (action === 'hover') return { action, ...(await hover(a)) };
@@ -812,7 +828,7 @@ async function javaStatus(args) {
 const TOOLS = [
   {
     name: 'java_search',
-    description: '查找 Java 符号（首选，不要用 Grep 查 Java 符号）：query=工作区（支持 Class#method）、class+name=类内定位、file+name=文件内定位、只给 file=结构。返回精确行列与签名，优先读 summary。',
+    description: '查找 Java 符号的位置与结构（工作区语义检索）：query=工作区（支持 Class#method）、class+name=类内定位、file+name=文件内定位、只给 file=看结构。返回精确行列、kind（Class/Method/Field/Interface/Enum 等）与签名。适合：不知道符号在哪个文件、需要区分同名/重载、一次定位类内成员。不一定比文本搜索快：已知文件与位置只是读代码，直接 Read 即可；字符串/注释/TODO/配置、非 Java 文件、工程外或 target/ 生成源码，用 Grep/Read 更直接。桥接模式毫秒级，独立索引冷启动较慢。返回 0 条可回退文本搜索并说明原因。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -821,14 +837,14 @@ const TOOLS = [
         file: { type: 'string', description: '文件路径（绝对或相对工作区）' },
         name: { type: 'string', description: '文件内符号名或子串，例如 getRule' },
         container: { type: 'string', description: '限定外层类名' },
-        kind: { type: 'string', description: 'Method / Field / Class' },
+        kind: { type: 'string', description: 'Method / Field / Class / Interface / Enum / Constructor' },
         limit: { type: 'number', description: '返回上限；工作区默认 50，文件默认 200' },
       },
     },
   },
   {
     name: 'java_navigate',
-    description: '按位置导航 Java 符号。action=definition（默认，含源码行）、references（全部引用）、hover（类型/签名/文档）。行列从 1 开始。',
+    description: '在已知位置做 Java 语义导航：action=definition（含源码行）、references（引用/调用方）、hover（签名/文档）。line/column 从 1 开始且必须落在标识符上（落在包前缀、空白或标点会返回 0 条）。references 默认返回前 200 条（limit 可调，0=全部；count 为总数，truncated 表示截断）。适合：需要真实引用（排除注释、字符串、同名测试的假阳性）、从调用点跳定义、确认签名。只想大致定位文本时 Grep 足够；工程外文件、实现/类型/调用层次不提供。桥接模式下 references 始终包含声明。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -836,14 +852,15 @@ const TOOLS = [
         file: { type: 'string' },
         line: { type: 'number' },
         column: { type: 'number' },
-        includeDeclaration: { type: 'boolean', description: 'references 是否包含声明，默认 true' },
+        includeDeclaration: { type: 'boolean', description: 'references 是否包含声明，默认 true（桥接模式下该参数不生效，始终包含声明）' },
+        limit: { type: 'number', description: 'references 返回上限，默认 200；0 表示全部。count 为总数，truncated=true 表示被截断' },
       },
       required: ['file', 'line', 'column'],
     },
   },
   {
     name: 'java_diagnostics',
-    description: '读取实时编译错误/警告。给 file 查单文件；不给 file 查整个工作区。优先桥接的 IDE 诊断。',
+    description: '读取 IDE 中 JDT LS 的实时编译错误/警告，替代反复执行 Maven 做快速反馈。给 file 查单文件；不给 file 查整个工作区，返回错误总数与每条的文件/行/列/严重级别/code/message，可按文件聚合。适合：cannot be resolved、找不到符号、类型不匹配、import 报错、查看错误数量与分布。不适合：最终编译门禁与构建验证（注解处理器/Lombok 与 Maven 不完全等价，仍需 mvn/mvnw test-compile）、非 Java 文件 lint、依赖/配置问题。IDE 已分析过时即刻返回；索引冷启动时可能较慢。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -855,7 +872,7 @@ const TOOLS = [
   },
   {
     name: 'java_status',
-    description: '查看数据源（ide-bridge / standalone-jdtls）、索引状态、redhat.java 与 Lombok 探测。warmup=true 时后台启动索引。',
+    description: '查看数据源（ide-bridge / standalone-jdtls）、索引状态、redhat.java 与 Lombok 探测；warmup=true 时后台启动索引。先看 source：ide-bridge 表示语义查询毫秒级；standalone 建议 warmup 预热后复用，避免每次调用都等待。适合：首次使用前确认、查询 0 条或超时、桥接是否生效、多窗口定位。无需在每个任务中重复调用。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -884,6 +901,12 @@ async function handleRequest(msg) {
           protocolVersion: (params && params.protocolVersion) || '2024-11-05',
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: 'trae-java-navigator', version: '0.1.0' },
+          instructions: [
+            '本服务器提供 Java 语义导航：java_search（工作区/类内/文件内符号定位）、java_navigate（definition/references/hover）、java_diagnostics（实时编译错误）、java_status（数据源与索引状态）。',
+            '选择方式按“总耗时最短且结果可靠”，没有固定优先级：已知文件与位置只想读代码，直接 Read；不知道符号在哪个文件，用 java_search；需要真实引用/定义/签名（排除注释、字符串、同名测试假阳性）用 java_navigate；快速看编译错误用 java_diagnostics。',
+            '成本提示：桥接模式（source=ide-bridge）索引已就绪，语义查询通常毫秒级；独立 JDT LS 冷启动可能数十秒，小任务先用 Read/Grep，同时 java_status {warmup:true} 预热。文本内容、非 Java 文件、工程外或 target/ 生成源码，Grep/Read 更直接。',
+            '工具返回 0 条或报错时回退文本搜索并说明原因；工具只读，不做重命名/重构、调用/类型/实现层次；IDE 诊断不能替代编译门禁（最终仍需 mvn/mvnw test-compile）。',
+          ].join(' '),
         },
       });
       return;

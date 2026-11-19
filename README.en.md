@@ -43,7 +43,7 @@ One command does three things:
 
 **The Skill needs no separate installation**: it is registered together with the plugin and appears as `java-navigate` after restart. It triggers automatically for Java symbol lookups, reference searches and compiler error investigations, and can also be invoked by name. Skills are part of the Trae plugin mechanism and **only work in Trae CN / Trae**; VS Code / Cursor have no plugin or skill system, so the MCP server must be configured manually (see Platform Compatibility).
 
-> The extension can also be installed on its own: run `npm run package:vsix` in `D:\trae-java-bridge-extension`, then `node install.mjs --vsix dist/trae-java-bridge.vsix`.
+> The extension can also be installed on its own: run `npm run package:vsix` in `D:\trae-java-suite\trae-java-bridge-extension`, then `node install.mjs --vsix dist/trae-java-bridge.vsix`.
 
 ## Platform Compatibility
 

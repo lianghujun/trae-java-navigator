@@ -43,7 +43,7 @@ node install.mjs
 
 **Skill 无需单独安装**：它随插件一起注册，重启后在技能列表中显示为 `java-navigate`；涉及 Java 符号定位、引用查找、编译错误排查时自动触发，也可在对话中直接点名“用 java-navigate 技能”。Skill 属于 Trae 插件机制，**仅 Trae CN / Trae 支持**；VS Code / Cursor 没有插件与技能系统，只能手动配置 MCP（见平台兼容）。
 
-> 扩展也可单独安装：在 `D:\trae-java-bridge-extension` 执行 `npm run package:vsix`，再 `node install.mjs --vsix dist/trae-java-bridge.vsix`。
+> 扩展也可单独安装：在 `D:\trae-java-suite\trae-java-bridge-extension` 执行 `npm run package:vsix`，再 `node install.mjs --vsix dist/trae-java-bridge.vsix`。
 
 ## 平台兼容
 

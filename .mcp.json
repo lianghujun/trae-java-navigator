@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "java-navigator": {
+      "command": "node",
+      "args": [
+        "./server/mcp-server.js"
+      ]
+    }
+  }
+}

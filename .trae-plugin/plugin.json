@@ -1,0 +1,35 @@
+{
+  "name": "trae-java-navigator",
+  "version": "0.1.2",
+  "description": "Java symbol navigation and real-time diagnostics for Trae agents via JDT LS (LSP).",
+  "author": {
+    "name": "Local"
+  },
+  "license": "MIT",
+  "keywords": [
+    "java",
+    "lsp",
+    "jdt",
+    "navigation",
+    "diagnostics",
+    "mcp"
+  ],
+  "skills": "./skills/",
+  "mcp": ".mcp.json",
+  "interface": {
+    "displayName": "Java Navigator",
+    "shortDescription": "Find Java symbols and real-time compiler errors",
+    "longDescription": "An MCP server that talks to the Eclipse JDT language server. Agents can find class/method/field locations, jump to definitions, find references, read hovers and query real-time Java diagnostics without running Maven.",
+    "developerName": "Local",
+    "category": "development_tools",
+    "capabilities": [
+      "Interactive",
+      "Read"
+    ],
+    "defaultPrompt": "Find the Java symbol I mention and show its real-time compiler errors.",
+    "brandColor": "#2F6FEB",
+    "logo": "./assets/icon.png",
+    "composerIcon": "./assets/icon.png",
+    "screenshots": []
+  }
+}

@@ -4,7 +4,7 @@
   <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.2-2F6FEB?style=flat-square" alt="version"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/server/mcp-server.js"><img src="https://img.shields.io/badge/MCP%20tools-4-2F6FEB?style=flat-square" alt="MCP tools"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/tree/main/skills"><img src="https://img.shields.io/badge/Skill-1-2F6FEB?style=flat-square" alt="skill"/></a>
-  <a href="https://github.com/lianghujun/trae-java-bridge"><img src="https://img.shields.io/badge/platform-Trae%20%7C%20VS%20Code%20%7C%20Cursor-6A5ACD?style=flat-square" alt="platform"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator#平台兼容"><img src="https://img.shields.io/badge/platform-Trae%20plugin%20%7C%20MCP%20any%20client-6A5ACD?style=flat-square" alt="platform"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/commits/main"><img src="https://img.shields.io/github/last-commit/lianghujun/trae-java-navigator?style=flat-square&color=green" alt="last commit"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/stargazers"><img src="https://img.shields.io/github/stars/lianghujun/trae-java-navigator?style=flat-square&color=yellow" alt="stars"/></a>
 </p>
@@ -34,7 +34,7 @@ node install.mjs
 2. 安装随包携带的桥接扩展 `vendor/trae-java-bridge.vsix`（找到 IDE CLI 时）
 3. 提示完全重启 Trae
 
-**Skill 无需单独安装**：它随插件一起注册，重启后在技能列表中显示为 `java-navigate`；涉及 Java 符号定位、引用查找、编译错误排查时自动触发，也可在对话中直接点名“用 java-navigate 技能”。
+**Skill 无需单独安装**：它随插件一起注册，重启后在技能列表中显示为 `java-navigate`；涉及 Java 符号定位、引用查找、编译错误排查时自动触发，也可在对话中直接点名“用 java-navigate 技能”。Skill 属于 Trae 插件机制，**仅 Trae CN / Trae 支持**；VS Code / Cursor 没有插件与技能系统，只能手动配置 MCP（见平台兼容）。
 
 > 扩展也可单独安装：在 `D:\trae-java-bridge-extension` 执行 `npm run package:vsix`，再 `node install.mjs --vsix dist/trae-java-bridge.vsix`。
 
@@ -42,8 +42,8 @@ node install.mjs
 
 | 环境 | 插件 | 扩展 | 说明 |
 |---|---|---|---|
-| Trae CN / Trae | ✅ | ✅ | 推荐组合，复用 IDE 的 JDT LS |
-| VS Code / Cursor 等 | — | ✅ | 扩展可单独使用，MCP 由任意 MCP 客户端调用 |
+| Trae CN / Trae | ✅ | ✅ | 推荐组合，复用 IDE 的 JDT LS；Skill 自动注册 |
+| VS Code / Cursor 等 | 手动配置 MCP | ✅ | 无 Trae 插件与 Skill 机制：需在 MCP 客户端手动指向 `server/mcp-server.js`，`java-navigate` 不会自动加载 |
 | 无 IDE | ✅ | — | 自动回退独立 JDT LS，首次需等待索引 |
 
 ## 工作原理（混合模式）
@@ -93,7 +93,7 @@ trae-java-bridge-extension/     Trae/VS Code 扩展（VSIX 或目录安装）
 
 ## 发行
 
-- **MCP 插件**：Trae 本地插件是“目录 + `.success` 标记”，没有 CLI 安装命令。发行物 = 目录压缩包（含 `install.mjs` / `.trae-plugin` / `.mcp.json` / `server` / `skills`），接收方解压后执行 `node install.mjs`。版本号写在 `.trae-plugin/plugin.json`，安装目录按 `<name>/<version>` 隔离，升级不会覆盖旧版本文件。
+- **MCP 插件**：Trae 本地插件是“目录 + `.success` 标记”，没有 CLI 安装命令。发行物 = 目录压缩包（含 `install.mjs` / `.trae-plugin` / `.mcp.json` / `server` / `skills`），接收方解压后执行 `node install.mjs`。版本号写在 `.trae-plugin/plugin.json`，安装目录按 `<name>/<version>` 隔离，升级不会覆盖旧版本文件。VS Code / Cursor 没有 Trae 插件机制，只能把 `server/mcp-server.js` 手动配置到其 MCP 客户端，Skill 不会注册。
 - **桥接扩展**：标准 VS Code 扩展，发行物 = `.vsix`（`npm run package:vsix`）。接收方执行 `node install.mjs --vsix <file>`，由 IDE 的 `--install-extension` 完成登记，enable/disable/卸载状态由 IDE 自身管理；也可在 IDE 扩展面板“从 VSIX 安装”。
 - 正式对外发布前需要把 `publisher` 从 `local` 改成真实 publisher，否则只能侧载（sideload），不能上架 gallery。
 - 升级：安装脚本在复制前会删除同插件/同扩展的旧版本目录，避免 IDE 同时看到多个版本。
@@ -132,7 +132,7 @@ java_search { "file": "<某 Controller.java>", "name": "getRule" }
 java_diagnostics { "severity": "error" }
 ```
 
-Skill 生效确认：技能列表中出现 `java-navigate`（随插件注册，无需单独安装）；也可直接说“用 java-navigate 技能查找 getRule”。
+Skill 生效确认（仅 Trae）：技能列表中出现 `java-navigate`（随插件注册，无需单独安装）；也可直接说“用 java-navigate 技能查找 getRule”。VS Code / Cursor 需手动配置 MCP，无此技能。
 
 ## 工具
 
@@ -153,6 +153,7 @@ Skill 生效确认：技能列表中出现 `java-navigate`（随插件注册，�
 
 | 项 | 说明 |
 |---|---|
+| 适用范围 | 仅 Trae CN / Trae 的插件机制会注册 Skill；VS Code / Cursor 无此机制，需手动配置 MCP 并自行说明使用规则 |
 | 作用 | 告诉 AI 何时用、如何用这 4 个工具；规定查找 Java 符号必须先调用 MCP 工具，禁止把 Grep/rg/Read 作为首选 |
 | 触发 | 任务涉及 Java 类/方法/字段定位、定义跳转、引用查找、编译错误排查时自动加载；也可在对话中直接点名 |
 | 边界 | Skill 只提供使用规范，不提供查询能力；数据来自 MCP 工具，因此与插件同启同停 |

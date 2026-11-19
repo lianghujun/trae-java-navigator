@@ -271,3 +271,13 @@ IDE 诊断只用于**快速定位**，不能替代编译：
 ## 声明
 
 本项目是面向 TRAE 开发的第三方开源插件，TRAE 是其对应权利人的注册商标，本项目与 TRAE 官方不存在任何关联、赞助、认证或合作关系，所有商标权利均归原权利人所有。
+
+## 支持作者
+
+如果这个项目对你有帮助，欢迎扫码请作者喝杯咖啡。您的支持将激励我持续更新和维护本项目。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/lianghujun/trae-java-navigator/main/assets/sponsor.jpg" alt="赞赏码" width="280"/>
+</p>
+
+> 注：此为自愿捐赠，非商业交易，不提供发票或商业售后服务。

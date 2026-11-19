@@ -11,6 +11,10 @@
 </p>
 
 <p align="center">
+  简体中文 | <a href="./README.en.md">English</a>
+</p>
+
+<p align="center">
   <b>让 AI 用编译器级精度定位 Java 符号，比 grep + find + read 更快、更准</b><br/>
   符号定位 · 定义/引用 · 实时编译诊断 · 4 个 MCP 工具 · 1 个 Skill
 </p>

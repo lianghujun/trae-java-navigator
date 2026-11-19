@@ -7,6 +7,7 @@
   <a href="https://github.com/lianghujun/trae-java-navigator#平台兼容"><img src="https://img.shields.io/badge/platform-Trae%20plugin%20%7C%20MCP%20any%20client-6A5ACD?style=flat-square" alt="platform"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/commits/main"><img src="https://img.shields.io/github/last-commit/lianghujun/trae-java-navigator?style=flat-square&color=green" alt="last commit"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/stargazers"><img src="https://img.shields.io/github/stars/lianghujun/trae-java-navigator?style=flat-square&color=yellow" alt="stars"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/LICENSE"><img src="https://img.shields.io/github/license/lianghujun/trae-java-navigator?style=flat-square&color=green" alt="license"/></a>
 </p>
 
 <p align="center">
@@ -260,3 +261,9 @@ IDE 诊断只用于**快速定位**，不能替代编译：
 - `java_search` 返回“索引尚未就绪”：兜底模式建索引中；改用桥接或稍后重试。
 - JDT LS 退出并报 `UnsupportedClassVersionError`：插件会自动选择 redhat.java 自带 JRE（21+）。
 - 配置目录只读导致 `AccessDeniedException`：插件会把 `config_win` 复制到可写缓存目录后再启动。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 lianghujun
+
+自有代码以 MIT 发布；运行时借用的 redhat.java / JDT LS（EPL-2.0）、Lombok（MIT）遵循各自协议，不随本仓库分发。

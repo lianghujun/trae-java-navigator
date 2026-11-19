@@ -30,9 +30,11 @@ node install.mjs
 
 一条命令完成：
 
-1. 安装 MCP 插件到 `~/.trae-cn/plugins/local/`
+1. 安装 MCP 插件到 `~/.trae-cn/plugins/local/`：含 4 个 MCP 工具与 `java-navigate` Skill
 2. 安装随包携带的桥接扩展 `vendor/trae-java-bridge.vsix`（找到 IDE CLI 时）
 3. 提示完全重启 Trae
+
+**Skill 无需单独安装**：它随插件一起注册，重启后在技能列表中显示为 `java-navigate`；涉及 Java 符号定位、引用查找、编译错误排查时自动触发，也可在对话中直接点名“用 java-navigate 技能”。
 
 > 扩展也可单独安装：在 `D:\trae-java-bridge-extension` 执行 `npm run package:vsix`，再 `node install.mjs --vsix dist/trae-java-bridge.vsix`。
 
@@ -64,6 +66,7 @@ trae-java-navigator/             MCP 插件（skills + mcp）
   server/bridge-client.js        ← 优先探测 IDE 桥
   server/lsp-client.js           ← 兜底：独立 JDT LS
   server/jdtls.js
+  skills/java-navigate/SKILL.md  ← 随插件注册，无需单独安装
 
 trae-java-bridge-extension/     Trae/VS Code 扩展（VSIX 或目录安装）
   extension.js                   ← 调用 vscode.languages / vscode.commands
@@ -100,6 +103,7 @@ trae-java-bridge-extension/     Trae/VS Code 扩展（VSIX 或目录安装）
 | 动作 | 行为 |
 |---|---|
 | 启用 MCP 插件 | Trae 按 `.mcp.json` 启动 `node server/mcp-server.js`；工具出现在 MCP 列表 |
+| 启用 Skill | 随插件注册，无单独开关；重启后技能列表出现 `java-navigate`，插件停用时一并失效 |
 | 停用 MCP 插件 | Trae 关闭 stdio，MCP 进程收到 stdin 结束/关闭后停止 JDT LS 子进程并退出，不留孤儿进程 |
 | 启用扩展 | `onStartupFinished` 触发，监听 127.0.0.1 随机端口并写桥接文件 |
 | 停用扩展 | VS Code 调用 `deactivate()` → 关闭 HTTP 服务、删除桥接文件、空目录一并删除；MCP 立即回退独立 JDT LS |
@@ -128,6 +132,8 @@ java_search { "file": "<某 Controller.java>", "name": "getRule" }
 java_diagnostics { "severity": "error" }
 ```
 
+Skill 生效确认：技能列表中出现 `java-navigate`（随插件注册，无需单独安装）；也可直接说“用 java-navigate 技能查找 getRule”。
+
 ## 工具
 
 只有 4 个工具，覆盖全部能力，避免占用过多上下文：
@@ -140,6 +146,18 @@ java_diagnostics { "severity": "error" }
 | `java_status` | 数据源、索引状态、依赖探测；`warmup=true` 后台启动索引 |
 
 行列号统一 **1-based**；`file` 支持绝对路径或相对工作区路径。结果都带 `summary` 文本行，优先读 summary。
+
+## Skill（java-navigate）
+
+插件内置 1 个 Skill（`skills/java-navigate/SKILL.md`），随插件一起注册，**无需单独安装或配置**。
+
+| 项 | 说明 |
+|---|---|
+| 作用 | 告诉 AI 何时用、如何用这 4 个工具；规定查找 Java 符号必须先调用 MCP 工具，禁止把 Grep/rg/Read 作为首选 |
+| 触发 | 任务涉及 Java 类/方法/字段定位、定义跳转、引用查找、编译错误排查时自动加载；也可在对话中直接点名 |
+| 边界 | Skill 只提供使用规范，不提供查询能力；数据来自 MCP 工具，因此与插件同启同停 |
+| 确认生效 | 重启 Trae 后技能列表中出现 `java-navigate`；或直接让 AI“用 java-navigate 查找 X 方法” |
+| 维护 | `SKILL.md` 必须保留 YAML frontmatter 的 `name` / `description`，缺失时 Trae 会跳过注册 |
 
 ## 桥接协议
 
@@ -233,6 +251,8 @@ IDE 诊断只用于**快速定位**，不能替代编译：
 ## 排障
 
 - 一直是 `standalone-jdtls`：确认 `local.trae-java-bridge` 扩展已启用；Reload 后查看 `%TEMP%\trae-java-bridge\` 是否生成文件。
+- 技能列表没有 `java-navigate`：确认已完全重启 Trae，并检查 `skills/java-navigate/SKILL.md` 的 YAML frontmatter（`name` / `description`）是否完整。
+- AI 仍优先用 Grep：在对话中明确“使用 java-navigate 技能”，并确认 4 个 MCP 工具已出现在工具列表中。
 - 桥接返回 401/连接失败：MCP Server 会自动回退到独立 JDT LS，并在 stderr 记录原因。
 - `java_search` 返回“索引尚未就绪”：兜底模式建索引中；改用桥接或稍后重试。
 - JDT LS 退出并报 `UnsupportedClassVersionError`：插件会自动选择 redhat.java 自带 JRE（21+）。

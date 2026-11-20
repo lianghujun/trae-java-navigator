@@ -24,6 +24,28 @@ function log(msg) {
   process.stderr.write('[java-navigator] ' + msg + '\n');
 }
 
+// 版本号只在 plugin.json 维护一处，避免 serverInfo 与实际插件版本漂移
+function pluginVersion() {
+  try {
+    const file = path.join(__dirname, '..', '.trae-plugin', 'plugin.json');
+    return JSON.parse(fs.readFileSync(file, 'utf8')).version || '0.1.4';
+  } catch (_) {
+    return '0.1.4';
+  }
+}
+
+const SERVER_VERSION = pluginVersion();
+
+function envNumber(name, fallback, min) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
+// 可用环境变量调整：JAVA_NAV_REFRESH_WAIT / JAVA_NAV_AUTO_CONFIG_MIN_FILES / JAVA_NAV_QUIET_MS
+const REFRESH_WAIT_MS = envNumber('JAVA_NAV_REFRESH_WAIT', 20000, 1000);
+const AUTO_CONFIG_MIN_FILES = envNumber('JAVA_NAV_AUTO_CONFIG_MIN_FILES', 50, 1);
+const DIAG_QUIET_MS = envNumber('JAVA_NAV_QUIET_MS', 800, 100);
+
 // ---------------------------------------------------------------------------
 // 工作区与 JDT LS
 // ---------------------------------------------------------------------------
@@ -134,6 +156,33 @@ let serviceReady = false;
 let diagnosticsByUri = new Map();
 let lastBridgeError = null;
 const openedFiles = new Set();
+const diagnosticsWaiters = new Set();
+
+function notifyDiagnosticsActivity() {
+  for (const fn of [...diagnosticsWaiters]) fn();
+}
+
+// 项目重载是异步的：等待诊断变化后的静默窗口，作为刷新完成的近似信号
+function waitForDiagnosticsQuiet(timeoutMs) {
+  return new Promise((resolve) => {
+    let quietTimer = null;
+    let finished = false;
+    const onActivity = () => {
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(() => finish(true), DIAG_QUIET_MS);
+    };
+    diagnosticsWaiters.add(onActivity);
+    const hard = setTimeout(() => finish(false), Math.max(1000, timeoutMs));
+    function finish(ok) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(hard);
+      if (quietTimer) clearTimeout(quietTimer);
+      diagnosticsWaiters.delete(onActivity);
+      resolve(ok);
+    }
+  });
+}
 
 function lspInitTimeout() {
   const n = Number(process.env.JAVA_NAV_LSP_INIT_TIMEOUT);
@@ -178,6 +227,7 @@ async function startClient() {
         version: params.version,
         diagnostics: params.diagnostics || [],
       });
+      notifyDiagnosticsActivity();
     });
     lsp.onNotification('language/status', (params) => {
       const type = params && params.type ? String(params.type) : '';
@@ -195,7 +245,7 @@ async function startClient() {
     try {
       await lsp.request('initialize', {
       processId: process.pid,
-      clientInfo: { name: 'trae-java-navigator', version: '0.1.0' },
+      clientInfo: { name: 'trae-java-navigator', version: SERVER_VERSION },
       rootPath: root,
       rootUri,
       workspaceFolders: [{ uri: rootUri, name: rootName }],
@@ -359,6 +409,71 @@ async function viaBridge(tool, args) {
     log('bridge failed, fallback to standalone JDT LS: ' + e.message);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// 项目模型刷新：桥接模式委托扩展；独立模式用 JDT LS 的通知/请求
+// ---------------------------------------------------------------------------
+function findBuildFile(root) {
+  for (const name of ['pom.xml', 'build.gradle', 'build.gradle.kts']) {
+    const p = path.join(root, name);
+    try { if (fs.existsSync(p)) return p; } catch (_) { /* ignore */ }
+  }
+  return null;
+}
+
+async function refreshStandalone(mode, timeoutMs) {
+  const root = ensureWorkspace();
+  const requested = ['auto', 'build', 'config'].includes(mode) ? mode : 'auto';
+  const wantConfig = requested === 'config' || (requested === 'auto' && openedFiles.size >= AUTO_CONFIG_MIN_FILES);
+  const started = Date.now();
+  try {
+    const lsp = await getClient();
+    if (wantConfig) {
+      const buildFile = findBuildFile(root);
+      if (!buildFile) {
+        return {
+          source: 'standalone-jdtls', ok: false, requested, mode: 'config',
+          error: '未找到 pom.xml / build.gradle，无法重载项目',
+        };
+      }
+      const quiet = waitForDiagnosticsQuiet(timeoutMs);
+      lsp.notify('java/projectConfigurationUpdate', { uri: pathToFileURL(buildFile).href });
+      const completed = await quiet;
+      return {
+        source: 'standalone-jdtls', ok: true, requested, mode: 'config',
+        actions: ['java/projectConfigurationUpdate', buildFile],
+        completed, timedOut: !completed, durationMs: Date.now() - started,
+      };
+    }
+    await lsp.request('java/buildWorkspace', false, Math.max(1000, timeoutMs));
+    return {
+      source: 'standalone-jdtls', ok: true, requested, mode: 'build',
+      actions: ['java/buildWorkspace'], completed: true, timedOut: false, durationMs: Date.now() - started,
+    };
+  } catch (e) {
+    return {
+      source: 'standalone-jdtls', ok: false, requested, mode: wantConfig ? 'config' : 'build',
+      error: e.message, durationMs: Date.now() - started,
+    };
+  }
+}
+
+async function refreshProjectModel(mode, timeoutMs) {
+  const root = ensureWorkspace();
+  const bridge = bridgeClient.findBridge(root);
+  if (bridge) {
+    try {
+      const result = await bridgeClient.refreshProject(bridge, mode, timeoutMs);
+      lastBridgeError = null;
+      return { source: 'ide-bridge', workspace: root, ...result };
+    } catch (e) {
+      lastBridgeError = e.message;
+      log('bridge refresh failed: ' + e.message);
+      return { source: 'ide-bridge', workspace: root, ok: false, requested: mode, error: e.message };
+    }
+  }
+  return { workspace: root, ...(await refreshStandalone(mode, timeoutMs)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -601,7 +716,7 @@ async function fileDiagnostics(args) {
     source: d.source || '',
   }));
   const filtered = filterDiagnostics(items, args.severity);
-  return { file, total: filtered.length, items: filtered };
+  return { file, source: 'standalone-jdtls', total: filtered.length, items: filtered };
 }
 
 async function projectDiagnostics(args) {
@@ -633,6 +748,7 @@ async function projectDiagnostics(args) {
     filtered.sort((a, b) => String(a.file).localeCompare(String(b.file)) || (a.line || 0) - (b.line || 0));
     return {
       workspace: root,
+      source: 'standalone-jdtls',
       indexStatus,
       total: filtered.length,
       items: filtered.slice(0, limit),
@@ -642,6 +758,7 @@ async function projectDiagnostics(args) {
     const fallback = collectDiagnostics(severity, limit);
     return {
       workspace: root,
+      source: 'standalone-jdtls',
       indexStatus,
       total: fallback.total,
       items: fallback.items,
@@ -672,7 +789,7 @@ function bridgeLombok(bridge) {
   return lombokStatus();
 }
 
-function indexStatusTool() {
+async function indexStatusTool() {
   let root = null;
   try {
     root = ensureWorkspace();
@@ -689,6 +806,9 @@ function indexStatusTool() {
   }
   const bridge = bridgeClient.findBridge(root);
   if (bridge) {
+    // 桥接同步统计属于可观测性信息，失败不影响状态查询
+    let sync = null;
+    try { sync = (await bridgeClient.health(bridge)).sync || null; } catch (_) { /* ignore */ }
     return {
       workspace: root,
       source: 'ide-bridge',
@@ -700,6 +820,7 @@ function indexStatusTool() {
       configuredRuntimes: JAVA_SETTINGS.runtimes.map((r) => r.name || r.path),
       redhatJava: { active: bridge.redhatJavaActive === true, path: bridge.redhatJavaPath || null },
       lombok: bridgeLombok(bridge),
+      sync,
       note: 'IDE 已按 Trae 的 java.configuration.runtimes 与 Maven 配置分析项目',
       bridge: {
         port: bridge.port,
@@ -734,7 +855,15 @@ async function warmup() {
   }
   const bridge = bridgeClient.findBridge(root);
   if (bridge) {
-    return { status: 'ready', source: 'ide-bridge', workspace: root };
+    let sync = null;
+    try { sync = (await bridgeClient.health(bridge)).sync || null; } catch (_) { /* ignore */ }
+    return {
+      status: 'ready',
+      source: 'ide-bridge',
+      workspace: root,
+      sync,
+      note: '桥接模式索引已就绪，warmup 只对独立 JDT LS 有效，不会刷新项目模型；项目陈旧请用 java_status {refresh:"auto"} 或 java_diagnostics {refresh:"config"}。',
+    };
   }
   getClient().catch((e) => log('warmup failed: ' + e.message));
   return { status: 'starting', source: 'standalone-jdtls', workspace: root };
@@ -745,6 +874,19 @@ async function warmup() {
 // ---------------------------------------------------------------------------
 async function javaSearch(args) {
   const a = args || {};
+  const mode = a.mode ? String(a.mode).toLowerCase() : '';
+  if (mode) {
+    if (!['workspace', 'class', 'file', 'outline'].includes(mode)) {
+      throw new Error('未知 mode: ' + a.mode + '（可选 workspace / class / file / outline）');
+    }
+    if (mode === 'workspace' && !a.query) throw new Error('mode=workspace 需要 query（类名、前缀或 Class#method）');
+    if (mode === 'class' && !a.class) throw new Error('mode=class 需要 class（类名）');
+    if ((mode === 'file' || mode === 'outline') && !a.file) throw new Error('mode=' + mode + ' 需要 file（文件路径）');
+    if (mode === 'file' && !a.name) throw new Error('mode=file 需要 name（成员名）；只想看文件结构请用 mode=outline');
+    const rest = { ...a, mode: undefined };
+    if (mode === 'outline') rest.name = undefined;
+    return { mode, ...(await javaSearch(rest)) };
+  }
   // 只知道类名：先定位类文件，再在文件内查符号（一次调用完成 “X 类里 Y 在哪”）
   if (!a.file && a.class) {
     const cls = String(a.class).trim();
@@ -813,14 +955,25 @@ async function javaNavigate(args) {
 
 async function javaDiagnostics(args) {
   const a = args || {};
-  if (a.file) return { scope: 'file', ...(await fileDiagnostics({ file: a.file, severity: a.severity || 'all' })) };
-  return { scope: 'project', ...(await projectDiagnostics({ severity: a.severity || 'error', limit: a.limit })) };
+  let refresh = null;
+  if (a.refresh && a.refresh !== 'none') {
+    refresh = await refreshProjectModel(a.refresh, REFRESH_WAIT_MS);
+  }
+  const result = a.file
+    ? { scope: 'file', ...(await fileDiagnostics({ file: a.file, severity: a.severity || 'all' })) }
+    : { scope: 'project', ...(await projectDiagnostics({ severity: a.severity || 'error', limit: a.limit })) };
+  return refresh ? { ...result, refresh } : result;
 }
 
 async function javaStatus(args) {
   const a = args || {};
+  if (a.refresh && a.refresh !== 'none') {
+    const refresh = await refreshProjectModel(a.refresh, REFRESH_WAIT_MS);
+    const status = await indexStatusTool();
+    return { ...status, refresh };
+  }
   if (a.warmup === true) return await warmup();
-  return indexStatusTool();
+  return await indexStatusTool();
 }
 
 // ---------------------------------------------------------------------------
@@ -829,56 +982,121 @@ async function javaStatus(args) {
 const TOOLS = [
   {
     name: 'java_search',
-    description: '查找 Java 符号的位置与结构（工作区语义检索）：query=工作区（支持 Class#method）、class+name=类内定位、file+name=文件内定位、只给 file=看结构。返回精确行列、kind（Class/Method/Field/Interface/Enum 等）与签名。适合：不知道符号在哪个文件、需要区分同名/重载、一次定位类内成员。不一定比文本搜索快：已知文件与位置只是读代码，直接 Read 即可；字符串/注释/TODO/配置、非 Java 文件、工程外或 target/ 生成源码，用 Grep/Read 更直接。桥接模式毫秒级，独立索引冷启动较慢。返回 0 条可回退文本搜索并说明原因。',
+    description: '定位 Java 符号位置。先按意图选 mode（一次调用即可，不要先猜参数再重试）：workspace=只知道名字，传 query（支持 Class#method）；class=知道类名，传 class（可加 name/kind 定位成员）；file=知道文件与成员名，传 file+name；outline=只看文件结构，传 file。省略 mode 时按已有参数自动推断。返回 count/items[{name,kind,container,file,line,column}] 与 summary。适合：不知道声明文件、区分同名/重载、一次定位类内成员。已知文件位置只想读代码、纯文本/非 Java/生成源码请用 Read/Grep。',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '工作区符号名或前缀，也可写 Class#method，例如 QualityController#alerts' },
-        class: { type: 'string', description: '类名；与 name 搭配可一次定位类内方法/字段' },
-        file: { type: 'string', description: '文件路径（绝对或相对工作区）' },
-        name: { type: 'string', description: '文件内符号名或子串，例如 getRule' },
-        container: { type: 'string', description: '限定外层类名' },
-        kind: { type: 'string', description: 'Method / Field / Class / Interface / Enum / Constructor' },
-        limit: { type: 'number', description: '返回上限；工作区默认 50，文件默认 200' },
+        mode: {
+          type: 'string',
+          enum: ['workspace', 'class', 'file', 'outline'],
+          description: '查询模式，决定必填参数：workspace→query；class→class（可选 name/kind）；file→file+name；outline→file。推荐显式传入',
+        },
+        query: {
+          type: 'string',
+          description: 'mode=workspace 时必填。符号名/前缀，或 Class#method。例：OrderService、QualityController#alerts',
+        },
+        class: {
+          type: 'string',
+          description: 'mode=class 时必填。完整或简单类名。例：OrderService',
+        },
+        file: {
+          type: 'string',
+          description: 'mode=file 或 outline 时必填。绝对路径或相对 Java 工程根路径。例：src/main/java/com/example/OrderService.java',
+        },
+        name: {
+          type: 'string',
+          description: 'mode=file 时必填；mode=class 时可选。成员名或子串。例：createOrder',
+        },
+        container: {
+          type: 'string',
+          description: '可选。限定外层类名，用于消除同名符号歧义',
+        },
+        kind: {
+          type: 'string',
+          description: '可选。进一步过滤：Method / Field / Class / Interface / Enum / Constructor',
+        },
+        limit: {
+          type: 'number',
+          description: '可选。返回上限：workspace 默认 50，class/file/outline 默认 200，最大 1000',
+        },
       },
+      anyOf: [
+        { required: ['query'] },
+        { required: ['class'] },
+        { required: ['file'] },
+      ],
+      examples: [
+        { mode: 'workspace', query: 'OrderService', limit: 10 },
+        { mode: 'class', class: 'OrderService', name: 'createOrder', kind: 'Method' },
+        { mode: 'file', file: 'src/main/java/com/example/OrderService.java', name: 'createOrder' },
+        { mode: 'outline', file: 'src/main/java/com/example/OrderService.java' },
+      ],
     },
   },
   {
     name: 'java_navigate',
-    description: '在已知位置做 Java 语义导航：action=definition（含源码行）、references（引用/调用方）、hover（签名/文档）。line/column 从 1 开始且必须落在标识符上（落在包前缀、空白或标点会返回 0 条）。references 默认返回前 200 条（limit 可调，0=全部；count 为总数，truncated 表示截断）。适合：需要真实引用（排除注释、字符串、同名测试的假阳性）、从调用点跳定义、确认签名。只想大致定位文本时 Grep 足够；工程外文件、实现/类型/调用层次不提供。桥接模式下 references 始终包含声明。',
+    description: '在已知位置做 Java 语义导航。action：definition（默认，跳定义并返回源码行）/ references（引用与调用方）/ hover（签名与文档）。file/line/column 必填，行列从 1 开始且必须落在标识符首字符；落在包前缀、空白或标点会返回 0 条。references 默认前 200 条（limit=0 为全部），返回 count（总数）/returned/truncated/items。需要实现/类型/调用层次或重构时本工具不提供。',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['definition', 'references', 'hover'], description: '默认 definition' },
-        file: { type: 'string' },
-        line: { type: 'number' },
-        column: { type: 'number' },
-        includeDeclaration: { type: 'boolean', description: 'references 是否包含声明，默认 true（桥接模式下该参数不生效，始终包含声明）' },
+        action: {
+          type: 'string',
+          enum: ['definition', 'references', 'hover'],
+          description: '导航类型，默认 definition。definition=跳定义；references=找引用；hover=看签名/文档',
+        },
+        file: { type: 'string', description: '文件绝对路径或相对 Java 工程根路径' },
+        line: { type: 'number', description: '从 1 开始，必须落在标识符所在行' },
+        column: { type: 'number', description: '从 1 开始的字符偏移（Tab 算 1 个字符），必须指向标识符第一个字符' },
+        includeDeclaration: { type: 'boolean', description: 'references 是否包含声明，默认 true（桥接模式下始终包含）' },
         limit: { type: 'number', description: 'references 返回上限，默认 200；0 表示全部。count 为总数，truncated=true 表示被截断' },
       },
       required: ['file', 'line', 'column'],
+      examples: [
+        { action: 'definition', file: 'src/main/java/com/example/OrderService.java', line: 88, column: 17 },
+        { action: 'references', file: 'src/main/java/com/example/OrderService.java', line: 42, column: 18, limit: 200 },
+      ],
     },
   },
   {
     name: 'java_diagnostics',
-    description: '读取 IDE 中 JDT LS 的实时编译错误/警告，替代反复执行 Maven 做快速反馈。给 file 查单文件；不给 file 查整个工作区，返回错误总数与每条的文件/行/列/严重级别/code/message，可按文件聚合。适合：cannot be resolved、找不到符号、类型不匹配、import 报错、查看错误数量与分布。不适合：最终编译门禁与构建验证（注解处理器/Lombok 与 Maven 不完全等价，仍需 mvn/mvnw test-compile）、非 Java 文件 lint、依赖/配置问题。IDE 已分析过时即刻返回；索引冷启动时可能较慢。',
+    description: '读取 IDE 中 JDT LS 的实时编译错误/警告，替代反复执行 Maven 做快速反馈。给 file 查单文件（默认全部级别）；不给 file 查整个工作区（默认只查 error），返回 total 与每条 file/line/column/severity/code/message。适合：cannot be resolved、找不到符号、类型不匹配、import 报错、查看错误分布。不适合：最终编译门禁（仍需 mvn/mvnw test-compile）、非 Java 文件 lint、依赖/配置问题。桥接模式附带 consistency：current/reloaded 可直接使用；dirty（有未保存修改）与 unknown（检查失败）不要据此下结论；工作区 needsRefresh=true 表示项目模型滞后，用 refresh:"auto" 刷新后重查，仍陈旧用 refresh:"config" 强制完整重载。',
     inputSchema: {
       type: 'object',
       properties: {
-        file: { type: 'string', description: '可选；省略则查整个工作区' },
-        severity: { type: 'string', enum: ['all', 'error', 'warning', 'info', 'hint'], description: '文件默认 all，工作区默认 error' },
-        limit: { type: 'number', description: '工作区上限，默认 300' },
+        file: { type: 'string', description: '可选。单文件路径（绝对或相对工作区）；省略则查整个工作区' },
+        severity: { type: 'string', enum: ['all', 'error', 'warning', 'info', 'hint'], description: '过滤级别：文件模式默认 all，工作区模式默认 error' },
+        limit: { type: 'number', description: '可选。工作区模式返回上限，默认 300（最大 1000）' },
+        refresh: {
+          type: 'string',
+          enum: ['none', 'auto', 'build', 'config'],
+          description: '可选。返回前刷新项目模型：auto=按变更规模自动选择（模型陈旧时优先 config）；build=增量编译（快）；config=完整重载（java.projectConfiguration.update，较慢但能修复批量移动/重命名后的模型错位）。默认 none',
+        },
       },
+      examples: [
+        { file: 'src/main/java/com/example/OrderService.java', severity: 'all' },
+        { severity: 'error', limit: 100 },
+        { refresh: 'auto', severity: 'error', limit: 100 },
+        { refresh: 'config' },
+      ],
     },
   },
   {
     name: 'java_status',
-    description: '查看数据源（ide-bridge / standalone-jdtls）、索引状态、redhat.java 与 Lombok 探测；warmup=true 时后台启动索引。先看 source：ide-bridge 表示语义查询毫秒级；standalone 建议 warmup 预热后复用，避免每次调用都等待。适合：首次使用前确认、查询 0 条或超时、桥接是否生效、多窗口定位。无需在每个任务中重复调用。',
+    description: '查看数据源（ide-bridge / standalone-jdtls）、索引状态、redhat.java 与 Lombok 探测；refresh 可在返回前刷新项目模型（桥接模式直接触发 JDT 刷新，独立模式发送 java/projectConfigurationUpdate / java/buildWorkspace）。先看 source：ide-bridge 表示语义查询毫秒级；standalone 建议 warmup 预热后复用。桥接模式还返回 sync（noopChecks / reloadedCount / dirtyConflicts / circuitBroken / lastBuildMode / lastModelRefreshAt / projectDirty）。适合：首次使用前确认、needsRefresh 清不掉、怀疑项目模型陈旧、多窗口定位。',
     inputSchema: {
       type: 'object',
       properties: {
-        warmup: { type: 'boolean', description: '后台启动 JDT LS 并开始建索引' },
+        refresh: {
+          type: 'string',
+          enum: ['none', 'auto', 'build', 'config'],
+          description: '刷新项目模型后再返回状态：auto=按变更规模选择；build=增量编译；config=完整重载（java.projectConfiguration.update）。模型明显陈旧或批量移动文件后用 auto/config',
+        },
+        warmup: { type: 'boolean', description: '仅对独立 JDT LS 有效：后台启动索引。桥接模式已就绪，该参数不会刷新项目模型' },
       },
+      examples: [
+        { refresh: 'auto' },
+        { warmup: true },
+      ],
     },
   },
 ];
@@ -901,12 +1119,15 @@ async function handleRequest(msg) {
         result: {
           protocolVersion: (params && params.protocolVersion) || '2024-11-05',
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: 'trae-java-navigator', version: '0.1.0' },
+          serverInfo: { name: 'trae-java-navigator', version: SERVER_VERSION },
           instructions: [
             '本服务器提供 Java 语义导航：java_search（工作区/类内/文件内符号定位）、java_navigate（definition/references/hover）、java_diagnostics（实时编译错误）、java_status（数据源与索引状态）。',
+            'java_search 用 mode 明确意图（workspace=query / class=class / file=file+name / outline=file），一次调用即可，不要先猜参数再重试；省略 mode 时按参数自动推断。',
             '选择方式按“总耗时最短且结果可靠”，没有固定优先级：已知文件与位置只想读代码，直接 Read；不知道符号在哪个文件，用 java_search；需要真实引用/定义/签名（排除注释、字符串、同名测试假阳性）用 java_navigate；快速看编译错误用 java_diagnostics。',
             '成本提示：桥接模式（source=ide-bridge）索引已就绪，语义查询通常毫秒级；独立 JDT LS 冷启动可能数十秒，小任务先用 Read/Grep，同时 java_status {warmup:true} 预热。文本内容、非 Java 文件、工程外或 target/ 生成源码，Grep/Read 更直接。',
             '工具返回 0 条或报错时回退文本搜索并说明原因；工具只读，不做重命名/重构、调用/类型/实现层次；IDE 诊断不能替代编译门禁（最终仍需 mvn/mvnw test-compile）。',
+            '诊断结果带 consistency：current/reloaded 可正常使用；dirty 表示编辑器有未保存修改，unknown 表示一致性检查失败，这两种情况不要据此下结论；工作区模式 needsRefresh=true 时项目模型滞后。',
+            '项目模型陈旧时用 java_diagnostics {refresh:"auto"} 或 java_status {refresh:"auto"} 触发刷新；批量移动/重命名大量文件后用 refresh:"config" 做完整重载（扩展内部调用 java.projectConfiguration.update）。不要修改 pom.xml 时间戳，也不要依赖 warmup（它只启动独立 JDT LS）。',
           ].join(' '),
         },
       });

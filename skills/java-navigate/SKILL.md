@@ -3,7 +3,7 @@ name: java-navigate
 description: "Use when answering: where is a Java class/method/field, which file declares it, who calls it, where does this line jump to, what is the signature, why does compilation fail, how many compile errors exist and in which files. Returns exact file:line:column for Java symbols. Prefer it when the declaring file is unknown or exact semantics matter (same-name/overload, real references). Read/Grep are cheaper for known files/positions, plain text, non-Java files, and generated/out-of-project sources. Not for renaming/refactoring, call/type/implementation hierarchies, or final build verification."
 description_zh: "当需要回答「某类/方法/字段在哪、谁调用了它、这行跳到哪、签名是什么、为什么编译报错、一共有多少错误、分布在哪些文件」时使用，返回精确的 file:line:column 与错误清单。按耗时与可信度选择：不知道声明文件、需要区分同名/重载/真实引用时，工具通常比 Grep 快 1–2 个数量级；已知文件位置读代码、纯文本、非 Java 文件、生成或工程外源码则用 Read/Grep。不覆盖重命名/重构、调用/类型/实现层次与最终构建验证。"
 description_en: "Use when answering: where is a Java class/method/field, which file declares it, who calls it, where does this line jump to, what is the signature, why does compilation fail, how many compile errors exist and in which files. Returns exact file:line:column for Java symbols. Prefer it when the declaring file is unknown or exact semantics matter (same-name/overload, real references). Read/Grep are cheaper for known files/positions, plain text, non-Java files, and generated/out-of-project sources. Not for renaming/refactoring, call/type/implementation hierarchies, or final build verification."
-version: "0.1.2"
+version: "0.1.7"
 ---
 
 # Java Navigator
@@ -14,30 +14,37 @@ version: "0.1.2"
 
 `file` 可以传绝对路径，也可以传相对 Java 工程根目录的路径。
 
+> **工具是延迟加载的（Trae 插件机制）**：首次使用前先执行一次 `ToolSearch` 加载全部 4 个工具（`java_search` / `java_navigate` / `java_diagnostics` / `java_status`），再按下文模板调用。一次性加载即可，不要逐个加载，也不要因为启动时看不到 schema 就改用 Grep。`java_search` 用 `mode` 明确意图，通常一次调用就能定位，不需要“先猜参数再重试”。
+
 ## 场景 → 调用（先查这张表）
 
 | 你要回答的问题 | 调用 | 关键点 |
 |---|---|---|
-| 某类在哪？在哪个包？ | `java_search {query:"类名", limit:10}` | 用完整类名或前缀；结果里看 `kind=Class`。不要用 `String`/`get` 这类泛化词，会让查询退化到秒级 |
-| A 类里的 b 方法在哪？ | `java_search {class:"A", name:"b", kind:"Method"}` | 不需要先知道文件 |
-| 某文件里有哪些方法/字段？ | `java_search {file:"...", kind:"Method", limit:100}` | 大文件先按 `kind` 收窄 |
+| 某类在哪？在哪个包？ | `java_search {mode:"workspace", query:"类名", limit:10}` | 用完整类名或前缀；结果里看 `kind=Class`。不要用 `String`/`get` 这类泛化词，会让查询退化到秒级 |
+| A 类里的 b 方法在哪？ | `java_search {mode:"class", class:"A", name:"b", kind:"Method"}` | 不需要先知道文件 |
+| 某文件里有哪些方法/字段？ | `java_search {mode:"outline", file:"...", kind:"Method", limit:100}` | 大文件先按 `kind` 收窄 |
+| 已知文件，找其中某个成员 | `java_search {mode:"file", file:"...", name:"b"}` | `mode=file` 必须给 `name`；只看结构用 `mode=outline` |
 | 第 N 行这个调用跳到哪？ | `java_navigate {action:"definition", file, line, column}` | 位置必须落在**标识符首字符**；落在包前缀/空白/标点会返回 0 条 |
 | 谁调用了它？被哪些文件引用？ | 先取声明位置，再 `java_navigate {action:"references", file, line, column, limit:200}` | 看 `count` 与 `truncated`；>500 条先截断或改用 Grep |
 | 这个方法的签名/参数是什么？ | `java_navigate {action:"hover", file, line, column}` | 目标在依赖 jar 内时尤其有用 |
 | 为什么编译报错？错误有多少、分布在哪些文件？ | `java_diagnostics {severity:"error", limit:100}` | 返回 `total` 以及每条 `file/line/column/severity/code/message`；可按 `file` 聚合出“哪些文件、各多少条” |
 | 这个文件有哪些错误/警告？ | `java_diagnostics {file:"...", severity:"all", limit:200}` | 单文件默认查全部级别；工作区默认只查 error |
-| 工具能用吗？索引好了吗？ | `java_status {}` / `{warmup:true}` | 首次使用、0 条或超时再查，不必每次 |
+| 项目模型陈旧、批量移动/重命名文件后诊断不对 | `java_diagnostics {refresh:"auto"}`；仍陈旧用 `{refresh:"config"}` | 不要修改 pom.xml 时间戳；refresh 才会真正触发 JDT 重载 |
+| 工具能用吗？索引好了吗？ | `java_status {}` / `{warmup:true}` | `warmup` 只对独立 JDT LS 有效；桥接模式看 `sync.projectDirty`，陈旧用 `refresh` |
 
 ## 调用模板（可直接照抄，替换文件名与行列）
 
 ```json
-{"name":"java_search","arguments":{"query":"OrderService","limit":10}}
+{"name":"java_search","arguments":{"mode":"workspace","query":"OrderService","limit":10}}
 ```
 ```json
-{"name":"java_search","arguments":{"class":"OrderService","name":"createOrder","kind":"Method"}}
+{"name":"java_search","arguments":{"mode":"class","class":"OrderService","name":"createOrder","kind":"Method"}}
 ```
 ```json
-{"name":"java_search","arguments":{"file":"src/main/java/com/example/OrderService.java","name":"createOrder","kind":"Method","limit":20}}
+{"name":"java_search","arguments":{"mode":"file","file":"src/main/java/com/example/OrderService.java","name":"createOrder","kind":"Method","limit":20}}
+```
+```json
+{"name":"java_search","arguments":{"mode":"outline","file":"src/main/java/com/example/OrderService.java","kind":"Method"}}
 ```
 ```json
 {"name":"java_navigate","arguments":{"action":"definition","file":"src/main/java/com/example/OrderService.java","line":88,"column":17}}
@@ -52,7 +59,7 @@ version: "0.1.2"
 {"name":"java_status","arguments":{"warmup":true}}
 ```
 
-获取 references 的起点：先用 `java_search {file, name}` 或 `java_search {query}` 拿到声明的 `file/line/column`（结果中的 `column` 就是标识符首字符），再传给 `java_navigate`。
+获取 references 的起点：先用 `java_search {mode:"file", file, name}` 或 `java_search {mode:"workspace", query}` 拿到声明的 `file/line/column`（结果中的 `column` 就是标识符首字符），再传给 `java_navigate`。
 
 ## 返回什么（字段含义）
 
@@ -61,10 +68,42 @@ version: "0.1.2"
 - `java_navigate references` → `count`（总数）、`returned`（实际条数）、`truncated`、`items[{file,line,column,endLine,endColumn}]`、`summary`。
 - `java_navigate hover` → `text`（签名/文档）与 `range`。
 - `java_diagnostics` → `total`；文件模式有 `file`，工作区模式 `items[{file,line,column,severity,message,source,code}]` 按文件排序。
-- `java_status` → `source`（`ide-bridge` = 复用 IDE 索引；`standalone-jdtls` = MCP 自己启动的 JDT LS）、`status`、`ready`、`bridgeError`、`projectJavaVersion`、`lombok` 等。
+- `java_diagnostics`（桥接模式）→ 额外返回 `consistency`（一致性状态，见下节）；工作区模式的 `consistency` 含 `needsRefresh` / `changedFiles` / `truncated`。
+- `java_status` → `source`（`ide-bridge` = 复用 IDE 索引；`standalone-jdtls` = MCP 自己启动的 JDT LS）、`status`、`ready`、`bridgeError`、`projectJavaVersion`、`lombok`、`sync`（桥接同步统计）等。
+
+## 诊断一致性（consistency）
+
+外部写入（脚本、AI 直接写盘、`git checkout`）不会触发 JDT 的文档同步，可能让诊断停留在旧内容上。桥接模式会在诊断查询前自动比较编辑器与磁盘，必要时重读并刷新，然后返回 `consistency`：
+
+| state | 含义 | 怎么用 |
+|---|---|---|
+| `current` | 编辑器内容与磁盘一致 | 正常使用 |
+| `reloaded` | 刚刚重读过磁盘 | 正常使用；若 `stale=true` 表示等待 JDT 刷新超时，可稍后重查 |
+| `dirty` | 文件有未保存修改，未做同步 | 不要据此下结论；提示用户保存或放弃修改 |
+| `not_open` | 文件未打开，诊断来自 JDT 磁盘模型 | 通常可正常使用 |
+| `unknown` | 检查失败（超时、非 UTF-8、熔断等） | 不要据此下结论；把 `reason` 说明给用户 |
+| `needsRefresh` | 工作区模式：有外部变更未被项目模型吸收 | 项目级结果可能滞后，必要时稍后重查 |
+
+只看 `state`：`current` / `reloaded` / `not_open` 可以正常下结论；`dirty` / `unknown` 必须先解决再判断。`reason` 给出具体原因。
+
+## 项目模型刷新（refresh）
+
+`needsRefresh=true`，或明显出现“代码没问题但诊断还报旧错 / 工作区 0 错误”时，用 `java_diagnostics` 或 `java_status` 的 `refresh` 参数：
+
+| refresh | 行为 | 适用 |
+|---|---|---|
+| `none` | 不刷新（默认） | 日常查询 |
+| `auto` | 变更文件多时完整重载，否则增量编译 | 首选 |
+| `build` | 增量编译（`java.workspace.compile`） | 少量文件、想快速刷新 |
+| `config` | 完整重载（`java.projectConfiguration.update`） | 批量移动/重命名后模型错位、`auto` 无效 |
+
+- 返回的 `refresh` 字段：`ok`、`mode`、`completed`、`timedOut`、`durationMs`、`projectDirty`。
+- `completed=false` 表示重载仍在后台进行（大工程常见）；等几秒再查，不要反复触发。
+- 不要用 `warmup:true` 刷新桥接模型（它只启动独立 JDT LS），也不要修改 `pom.xml` 时间戳来“骗”JDT 重载。
 
 ## 参数规则
 
+- `mode`（`java_search`）：`workspace` 配 `query`；`class` 配 `class`（可选 `name`/`kind`）；`file` 配 `file`+`name`；`outline` 只配 `file`。显式传 `mode` 可以避免参数组合猜错；省略时按已有参数自动推断。
 - `line` / `column`：从 1 开始，列号按字符偏移计算（Tab 算 1 个字符），不是屏幕视觉列；`column` 必须指向标识符第一个字符。definition/references 返回 0 条时，优先检查是否指到了包名前缀或空白。
 - `kind`：`Class` / `Interface` / `Enum` / `Method` / `Field` / `Constructor`；Java record 归为 `Class`。`kind` 只作用于 `file` 与 `class` 定位；工作区 `query` 路径不做 kind 过滤，需在结果里自行看 `kind`。
 - `limit`：`java_search` 工作区默认 50、文件默认 200；`references` 默认 200，`limit:0` 返回全部。响应里 `count` 是总数，`returned` 是实际条数，`truncated` 表示是否截断。
@@ -108,12 +147,13 @@ version: "0.1.2"
 2. **超时或索引未就绪**：`java_status {warmup:true}` 预热后重试；小任务可先用 Read/Grep，不必等。
 3. **依赖 jar 内的符号**：全工程搜符号可能搜不到，从调用处用 `definition` 或 `hover` 更可靠。
 4. **工程外 / 非 Java / 生成代码**：直接 Grep/Read，不要反复试工具。
-5. 回退文本搜索时，在回答中说明原因与所用方式。
+5. **`consistency.state = dirty / unknown`**：不要用该诊断下结论；先提示用户保存，或稍后重查。
+6. 回退文本搜索时，在回答中说明原因与所用方式。
 
 ## 数据源
 
-- `ide-bridge`：IDE 里已打开该工程时复用其索引，查询毫秒级；诊断与编辑器里显示的实时错误/警告一致（推荐）。
-- `standalone-jdtls`：没有可用的 IDE 桥接时，由 MCP 自行启动 JDT LS；可 `warmup:true` 预热。诊断只覆盖它已分析/已发布的文件，可能比 IDE 里显示的少。
+- `ide-bridge`：IDE 里已打开该工程时复用其索引，查询毫秒级；诊断与编辑器里显示的实时错误/警告一致（推荐）。外部写入后会自动重读磁盘，返回 `consistency`。
+- `standalone-jdtls`：没有可用的 IDE 桥接时，由 MCP 自行启动 JDT LS；可 `warmup:true` 预热。诊断只覆盖它已分析/已发布的文件，可能比 IDE 里显示的少，且没有 `consistency`。
 
 ## 注意
 

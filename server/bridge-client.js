@@ -84,7 +84,17 @@ function requestTimeout() {
   return Number.isFinite(n) && n > 0 ? n : 20000;
 }
 
-function request(bridge, apiPath, params) {
+function envNumber(name, fallback, min) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n >= min ? n : fallback;
+}
+
+// 项目模型刷新可能持续几十秒，默认 65s，可用 JAVA_NAV_REFRESH_TIMEOUT 调整
+function refreshTimeout() {
+  return envNumber('JAVA_NAV_REFRESH_TIMEOUT', 65000, 5000);
+}
+
+function request(bridge, apiPath, params, timeoutMs) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== null) qs.set(k, String(v));
@@ -97,7 +107,7 @@ function request(bridge, apiPath, params) {
       port: bridge.port,
       path: fullPath,
       headers: { authorization: 'Bearer ' + bridge.token },
-      timeout: requestTimeout(),
+      timeout: Number(timeoutMs) > 0 ? Number(timeoutMs) : requestTimeout(),
     }, (res) => {
       let body = '';
       res.setEncoding('utf8');
@@ -113,6 +123,21 @@ function request(bridge, apiPath, params) {
     req.on('timeout', () => { req.destroy(new Error('bridge timeout')); });
     req.on('error', reject);
   });
+}
+
+function health(bridge) {
+  return request(bridge, '/health', {});
+}
+
+// 项目模型刷新可能持续几十秒（完整重载/增量构建），必须使用比普通查询更长的超时
+function refreshProject(bridge, mode, timeoutMs) {
+  const wait = Number(timeoutMs) > 0 ? Number(timeoutMs) : 15000;
+  return request(
+    bridge,
+    '/refresh',
+    { mode: mode || 'auto', timeout: wait },
+    Math.max(refreshTimeout(), wait + 10000),
+  );
 }
 
 async function callBridge(bridge, tool, args) {
@@ -146,4 +171,4 @@ async function callBridge(bridge, tool, args) {
   }
 }
 
-module.exports = { findBridge, callBridge, listBridgeWorkspaces, latestRedhatJavaPath };
+module.exports = { findBridge, callBridge, health, refreshProject, listBridgeWorkspaces, latestRedhatJavaPath };

@@ -1,7 +1,7 @@
 # Trae Java Navigator
 
 <p align="center">
-  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.2-2F6FEB?style=flat-square" alt="version"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.7-2F6FEB?style=flat-square" alt="version"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/server/mcp-server.js"><img src="https://img.shields.io/badge/MCP%20tools-4-2F6FEB?style=flat-square" alt="MCP tools"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/tree/main/skills"><img src="https://img.shields.io/badge/Skill-1-2F6FEB?style=flat-square" alt="skill"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator#platform-compatibility"><img src="https://img.shields.io/badge/platform-Trae%20plugin%20%7C%20MCP%20any%20client-6A5ACD?style=flat-square" alt="platform"/></a>
@@ -105,7 +105,7 @@ Key points:
 - **MCP plugin**: a Trae local plugin is a "directory + `.success` marker" with no CLI install command. The release artifact is a directory archive (containing `install.mjs` / `.trae-plugin` / `.mcp.json` / `server` / `skills`); unpack it and run `node install.mjs`. The version lives in `.trae-plugin/plugin.json`, and installs are isolated per `<name>/<version>` so upgrades never overwrite old files. VS Code / Cursor have no Trae plugin mechanism: point their MCP client at `server/mcp-server.js` manually and the Skill will not be registered.
 - **Bridge extension**: a standard VS Code extension; the artifact is a `.vsix` (`npm run package:vsix`). Install with `node install.mjs --vsix <file>`; enable/disable/uninstall state is managed by the IDE itself. You can also use "Install from VSIX" in the extension panel.
 - Before a public release, change `publisher` from `local` to a real publisher; otherwise only sideloading works and the extension cannot be listed on a gallery.
-- Upgrades: the installer deletes old directories of the same plugin/extension before copying, so the IDE never sees multiple versions.
+- Upgrades: the installer deletes old directories of the same plugin/extension before copying, so the IDE never sees multiple versions. If an older directory is held by a running MCP process (Windows file lock), the installer removes its `.success` marker and records it in `.pending-cleanup.json`; once the new MCP has fully started (old process exited), it deletes those directories automatically — no manual cleanup needed.
 
 ## Enable / Disable / Uninstall
 
@@ -149,10 +149,10 @@ Only 4 tools cover all capabilities, keeping context usage low:
 
 | Tool | Purpose |
 |---|---|
-| `java_search` | `query` = workspace search (supports `Class#method`); `class` + `name` = locate inside a class; `file` + `name` = locate inside a file; `file` only = file outline |
+| `java_search` | Use `mode` to state intent: `workspace`+`query` (supports `Class#method`) / `class` (+`name`) / `file`+`name` / `outline`+`file`; auto-inferred when `mode` is omitted |
 | `java_navigate` | `action=definition` (includes the source line) / `references` / `hover` |
-| `java_diagnostics` | Pass `file` for one file, omit it for the whole workspace |
-| `java_status` | Data source, index state, dependency probing; `warmup=true` starts indexing in the background |
+| `java_diagnostics` | Pass `file` for one file, omit it for the whole workspace; bridge mode adds `consistency`; `refresh:"auto|build|config"` refreshes the project model before returning |
+| `java_status` | Data source, index state, dependency probing; `refresh` refreshes the project model, `warmup=true` only applies to the standalone JDT LS; bridge mode adds `sync` statistics |
 
 Line and column numbers are **1-based**; `file` accepts absolute paths or workspace-relative paths. Results include a `summary` text line — read that first.
 
@@ -186,13 +186,34 @@ The extension writes a rendezvous file at `%TEMP%\trae-java-bridge\<workspace-ha
 The MCP server reads the file, verifies pid/token, then calls:
 
 ```text
+GET /health
 GET /diagnostics?file=&severity=
+GET /refresh?mode=auto|build|config&timeout=
 GET /symbols?query=&limit=
 GET /definition?file=&line=&column=
 GET /references?file=&line=&column=
 GET /documentSymbols?file=
 GET /hover?file=&line=&column=
 ```
+
+`/diagnostics` returns `consistency`; single-file example:
+
+```json
+{
+  "scope": "file",
+  "total": 0,
+  "items": [],
+  "consistency": {
+    "state": "reloaded",
+    "stale": false,
+    "dirty": false,
+    "reloaded": true,
+    "reason": null
+  }
+}
+```
+
+Workspace mode returns `consistency.state` / `needsRefresh` / `changedFiles` / `truncated`. `/health` additionally returns `sync` (`reloadedCount`, `dirtyConflicts`, `skipped`, `circuitBroken`, `lastSyncAt`, `projectDirty`, and more).
 
 It only listens on `127.0.0.1` with a random port and a Bearer token; nothing is exposed to the network.
 
@@ -206,10 +227,16 @@ It only listens on `127.0.0.1` with a random port and a Bearer token; nothing is
 | `JDTLS_HOME` / `REDHAT_JAVA_HOME` | `server` directory of the fallback JDT LS | Scans `redhat.java-*` in each IDE's extension directory |
 | `TRAE_USER_SETTINGS` | Explicit user `settings.json` | Scans the User directory of each IDE |
 | `TRAE_JAVA_NAV_CACHE` | Fallback JDT LS cache directory | System temp directory |
-| `JAVA_NAV_BRIDGE_TIMEOUT` | MCP → bridge request timeout (ms) | `20000` |
+| `JAVA_NAV_BRIDGE_TIMEOUT` | MCP → bridge normal request timeout (ms) | `20000` |
+| `JAVA_NAV_REFRESH_TIMEOUT` | MCP → bridge `/refresh` timeout (ms) | `65000` |
+| `JAVA_NAV_REFRESH_WAIT` | Max wait for diagnostics/build completion during `refresh` (ms) | `20000` |
+| `JAVA_NAV_AUTO_CONFIG_MIN_FILES` | Opened-file threshold that escalates standalone `refresh:"auto"` to a full reload | `50` |
+| `JAVA_NAV_QUIET_MS` | Diagnostics quiet period after a standalone reload (ms) | `800` |
 | `JAVA_NAV_LSP_INIT_TIMEOUT` | Maximum wait for fallback JDT LS init (ms) | `60000` |
 | `LOMBOK_JAR` | Explicit lombok agent jar | Auto-detected from redhat.java / the Lombok extension |
 | `TRAE_JAVA_BRIDGE_DIR` | Extension-side bridge file directory | Same as `JAVA_NAV_BRIDGE_DIR` |
+
+The bundled `.mcp.json` lists the defaults for `JAVA_NAV_BRIDGE_TIMEOUT` / `JAVA_NAV_REFRESH_TIMEOUT` / `JAVA_NAV_REFRESH_WAIT` / `JAVA_NAV_AUTO_CONFIG_MIN_FILES` / `JAVA_NAV_QUIET_MS`, so they can be adjusted in that file after installation. Bridge-side sync/build tuning lives in the extension settings `traeJavaBridge.sync.*` / `traeJavaBridge.project.*`.
 
 ## Lifecycle and Fallback
 
@@ -225,6 +252,34 @@ It only listens on `127.0.0.1` with a random port and a Bearer token; nothing is
 - In fallback mode the JDT LS is started with the lombok agent attached: `LOMBOK_JAR` first, then redhat.java's bundled `lombok/lombok-*.jar`, then the jar inside the `vscjava.vscode-lombok` / `gabrielbb.vscode-lombok` extension.
 - In bridge mode the IDE's redhat.java + Lombok extension handle it; the MCP server only probes and reports.
 - Members generated by Lombok are part of IDE diagnostics; the Maven build result remains authoritative.
+
+## Diagnostic Consistency
+
+Scripts, AI writing directly to disk, and `git checkout` do not trigger JDT's `didChange`, so diagnostics can lag behind the actual file content. In bridge mode the extension compares editor content with disk before answering a diagnostic query, reloads when needed, waits for JDT to refresh, and reports whether the result is trustworthy through `consistency`:
+
+| state | Meaning | What the agent should do |
+|---|---|---|
+| `current` | Editor content matches disk | Use normally |
+| `reloaded` | Disk was just reloaded | Use normally; `stale=true` means the refresh wait timed out, retry later |
+| `dirty` | Unsaved editor changes; no sync performed | Do not conclude; ask the user to save or discard changes |
+| `not_open` | File is not open; diagnostics come from the JDT disk model | Usually usable |
+| `unknown` | Check failed (timeout, non-UTF-8, circuit breaker, etc.) | Do not conclude; report `reason` |
+| `needsRefresh` | Workspace mode: external changes not yet absorbed by the project model | Use `refresh:"auto"`; if still stale, use `refresh:"config"` |
+
+Sync tuning (debounce, cooldown, circuit breaker, excluded directories, incremental build) lives in the extension settings `traeJavaBridge.sync.*` / `traeJavaBridge.watch.exclude` / `traeJavaBridge.project.autoBuild`; see the bridge extension README. After bulk external writes, the extension runs one incremental build 2 s after changes stop; when 50 or more files changed it automatically escalates to a full `java.projectConfiguration.update` reload.
+
+### Project model refresh
+
+`java_diagnostics` / `java_status` accept `refresh`:
+
+| Value | Behavior | When |
+|---|---|---|
+| `none` | No refresh (default) | Regular queries |
+| `auto` | Full reload when many files changed, otherwise incremental build | Preferred |
+| `build` | Incremental compile (`java.workspace.compile`) | Few files, quick refresh |
+| `config` | Full reload (`java.projectConfiguration.update`) | Model skewed by bulk moves/renames, or `auto` did not help |
+
+In bridge mode the extension performs the refresh; in standalone mode the MCP server sends the `java/projectConfigurationUpdate` notification or a `java/buildWorkspace` request. The result includes `refresh.ok/mode/completed/timedOut/durationMs`; `completed=false` means the reload is still running in the background, so query again later. `warmup:true` only applies to the standalone JDT LS and cannot refresh the bridge model; do not touch `pom.xml` timestamps to force a reload.
 
 ## Relationship to the Build Gate
 

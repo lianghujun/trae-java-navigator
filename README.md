@@ -1,7 +1,7 @@
 # Trae Java Navigator
 
 <p align="center">
-  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.2-2F6FEB?style=flat-square" alt="version"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.7-2F6FEB?style=flat-square" alt="version"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/server/mcp-server.js"><img src="https://img.shields.io/badge/MCP%20tools-4-2F6FEB?style=flat-square" alt="MCP tools"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/tree/main/skills"><img src="https://img.shields.io/badge/Skill-1-2F6FEB?style=flat-square" alt="skill"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator#平台兼容"><img src="https://img.shields.io/badge/platform-Trae%20plugin%20%7C%20MCP%20any%20client-6A5ACD?style=flat-square" alt="platform"/></a>
@@ -105,7 +105,7 @@ trae-java-bridge-extension/     Trae/VS Code 扩展（VSIX 或目录安装）
 - **MCP 插件**：Trae 本地插件是“目录 + `.success` 标记”，没有 CLI 安装命令。发行物 = 目录压缩包（含 `install.mjs` / `.trae-plugin` / `.mcp.json` / `server` / `skills`），接收方解压后执行 `node install.mjs`。版本号写在 `.trae-plugin/plugin.json`，安装目录按 `<name>/<version>` 隔离，升级不会覆盖旧版本文件。VS Code / Cursor 没有 Trae 插件机制，只能把 `server/mcp-server.js` 手动配置到其 MCP 客户端，Skill 不会注册。
 - **桥接扩展**：标准 VS Code 扩展，发行物 = `.vsix`（`npm run package:vsix`）。接收方执行 `node install.mjs --vsix <file>`，由 IDE 的 `--install-extension` 完成登记，enable/disable/卸载状态由 IDE 自身管理；也可在 IDE 扩展面板“从 VSIX 安装”。
 - 正式对外发布前需要把 `publisher` 从 `local` 改成真实 publisher，否则只能侧载（sideload），不能上架 gallery。
-- 升级：安装脚本在复制前会删除同插件/同扩展的旧版本目录，避免 IDE 同时看到多个版本。
+- 升级：安装脚本在复制前会删除同插件/同扩展的旧版本目录，避免 IDE 同时看到多个版本。旧版本目录如果正被运行中的 MCP 占用（Windows 文件锁），安装器会先摘掉它的 `.success` 标记并写入 `.pending-cleanup.json`；新版 MCP 完全启动后（旧进程已退出）自动删除这些目录，不需要手动清理。
 
 ## 启用 / 停用 / 卸载
 
@@ -149,10 +149,10 @@ Skill 生效确认（仅 Trae）：技能列表中出现 `java-navigate`（随�
 
 | 工具 | 作用 |
 |---|---|
-| `java_search` | `query`=工作区（支持 `Class#method`）；`class`+`name`=类内定位；`file`+`name`=文件内定位；只给 `file`=文件结构 |
+| `java_search` | 用 `mode` 明确意图：`workspace`+`query`（支持 `Class#method`）/ `class`（+`name`）/ `file`+`name` / `outline`+`file`；省略 `mode` 时自动推断 |
 | `java_navigate` | `action=definition`（含源码行）/ `references`（默认前 200 条，`limit` 可调，0=全部）/ `hover` |
-| `java_diagnostics` | 给 `file` 查单文件，省略则查整个工作区 |
-| `java_status` | 数据源、索引状态、依赖探测；`warmup=true` 后台启动索引 |
+| `java_diagnostics` | 给 `file` 查单文件，省略则查整个工作区；桥接模式附带 `consistency`；`refresh:"auto|build|config"` 可在返回前刷新项目模型 |
+| `java_status` | 数据源、索引状态、依赖探测；`refresh` 刷新项目模型，`warmup=true` 仅对独立 JDT LS 有效；桥接模式附带 `sync` 同步统计 |
 
 行列号统一 **1-based**；`file` 支持绝对路径或相对工作区路径。结果都带 `summary` 文本行，优先读 summary。
 
@@ -186,13 +186,34 @@ Skill 生效确认（仅 Trae）：技能列表中出现 `java-navigate`（随�
 MCP Server 读取该文件并验证 pid/token，然后访问：
 
 ```text
+GET /health
 GET /diagnostics?file=&severity=
+GET /refresh?mode=auto|build|config&timeout=
 GET /symbols?query=&limit=
 GET /definition?file=&line=&column=
 GET /references?file=&line=&column=&limit=
 GET /documentSymbols?file=
 GET /hover?file=&line=&column=
 ```
+
+`/diagnostics` 返回 `consistency`，单文件示例：
+
+```json
+{
+  "scope": "file",
+  "total": 0,
+  "items": [],
+  "consistency": {
+    "state": "reloaded",
+    "stale": false,
+    "dirty": false,
+    "reloaded": true,
+    "reason": null
+  }
+}
+```
+
+工作区模式返回 `consistency.state` / `needsRefresh` / `changedFiles` / `truncated`。`/health` 额外返回 `sync`（`reloadedCount`、`dirtyConflicts`、`skipped`、`circuitBroken`、`lastSyncAt`、`projectDirty` 等）。
 
 仅监听 `127.0.0.1`，随机端口 + Bearer token，无网络暴露。
 
@@ -206,10 +227,16 @@ GET /hover?file=&line=&column=
 | `JDTLS_HOME` / `REDHAT_JAVA_HOME` | 兜底 JDT LS 的 `server` 目录 | 自动扫描各 IDE 扩展目录下的 `redhat.java-*` |
 | `TRAE_USER_SETTINGS` | 指定用户 `settings.json` | 自动扫描各 IDE 的 User 目录 |
 | `TRAE_JAVA_NAV_CACHE` | 兜底 JDT LS 缓存目录 | 系统临时目录 |
-| `JAVA_NAV_BRIDGE_TIMEOUT` | MCP → 桥接扩展的单次请求超时（ms） | `20000` |
+| `JAVA_NAV_BRIDGE_TIMEOUT` | MCP → 桥接扩展的普通请求超时（ms） | `20000` |
+| `JAVA_NAV_REFRESH_TIMEOUT` | MCP → 桥接扩展的 `/refresh` 超时（ms） | `65000` |
+| `JAVA_NAV_REFRESH_WAIT` | `refresh` 等待诊断静默/构建完成的上限（ms） | `20000` |
+| `JAVA_NAV_AUTO_CONFIG_MIN_FILES` | 独立模式下 `refresh:"auto"` 升级为完整重载的已打开文件阈值 | `50` |
+| `JAVA_NAV_QUIET_MS` | 独立模式重载后诊断静默窗口（ms） | `800` |
 | `JAVA_NAV_LSP_INIT_TIMEOUT` | 兜底 JDT LS 初始化的等待上限（ms） | `60000` |
 | `LOMBOK_JAR` | 指定 lombok agent jar | 自动探测 redhat.java 自带 / Lombok 扩展 |
 | `TRAE_JAVA_BRIDGE_DIR` | 扩展侧桥接文件目录 | 与 `JAVA_NAV_BRIDGE_DIR` 相同 |
+
+插件自带的 `.mcp.json` 已显式写出 `JAVA_NAV_BRIDGE_TIMEOUT` / `JAVA_NAV_REFRESH_TIMEOUT` / `JAVA_NAV_REFRESH_WAIT` / `JAVA_NAV_AUTO_CONFIG_MIN_FILES` / `JAVA_NAV_QUIET_MS` 的默认值，安装后可直接在该文件里调整；桥接侧的同步/构建参数在扩展设置 `traeJavaBridge.sync.*` / `traeJavaBridge.project.*` 中。
 
 ## 生命周期与降级
 
@@ -225,6 +252,34 @@ GET /hover?file=&line=&column=
 - 兜底 JDT LS 启动时自动附加 lombok agent：优先 `LOMBOK_JAR`，其次 redhat.java 自带 `lombok/lombok-*.jar`，再次 `vscjava.vscode-lombok` / `gabrielbb.vscode-lombok` 扩展内的 jar。
 - 桥接模式下由 IDE 的 redhat.java + Lombok 扩展处理，MCP 只做探测与上报。
 - Lombok 生成的成员属于 IDE 诊断范畴，最终仍以 Maven 编译结果为准。
+
+## 诊断一致性
+
+脚本、AI 直接写盘、`git checkout` 不会触发 JDT 的 `didChange`，可能让 Problems 面板与诊断停留在旧内容上。桥接模式下扩展会在诊断查询前自动比较编辑器与磁盘，必要时重读并等待 JDT 刷新，再用 `consistency` 告诉调用方这份结果是否可信：
+
+| state | 含义 | Agent 应如何处理 |
+|---|---|---|
+| `current` | 编辑器内容与磁盘一致 | 正常使用 |
+| `reloaded` | 刚刚重读过磁盘 | 正常使用；`stale=true` 表示等待刷新超时，可稍后重查 |
+| `dirty` | 文件有未保存修改，未做同步 | 不要下结论；提示用户保存或放弃修改 |
+| `not_open` | 文件未打开，诊断来自磁盘模型 | 通常可正常使用 |
+| `unknown` | 检查失败（超时、非 UTF-8、熔断等） | 不要下结论；说明 `reason` |
+| `needsRefresh` | 工作区模式：外部变更未被项目模型吸收 | 用 `refresh:"auto"` 刷新；仍陈旧用 `refresh:"config"` |
+
+同步参数（去抖、冷却、熔断、排除目录、增量构建）在扩展设置 `traeJavaBridge.sync.*` / `traeJavaBridge.watch.exclude` / `traeJavaBridge.project.autoBuild` 中配置，详见桥接扩展 README。批量外部写入后，扩展会在变更停止 2 秒后自动触发一次增量构建，刷新未打开文件与项目级诊断；变更文件达到 50 个时自动升级为 `java.projectConfiguration.update` 完整重载。
+
+### 项目模型刷新（refresh）
+
+`java_diagnostics` / `java_status` 支持 `refresh`：
+
+| 值 | 行为 | 适用 |
+|---|---|---|
+| `none` | 不刷新（默认） | 日常查询 |
+| `auto` | 变更文件多时完整重载，否则增量编译 | 首选 |
+| `build` | 增量编译（`java.workspace.compile`） | 少量文件、快速刷新 |
+| `config` | 完整重载（`java.projectConfiguration.update`） | 批量移动/重命名后模型错位、`auto` 无效 |
+
+桥接模式由扩展执行；独立模式发送 `java/projectConfigurationUpdate` 通知或 `java/buildWorkspace` 请求。返回 `refresh.ok/mode/completed/timedOut/durationMs`：`completed=false` 表示重载仍在后台进行，稍后再查即可。`warmup:true` 只对独立 JDT LS 有效，不能刷新桥接模型；也不要通过修改 `pom.xml` 时间戳触发重载。
 
 ## 与编译门禁的关系
 

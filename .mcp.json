@@ -4,7 +4,14 @@
       "command": "node",
       "args": [
         "./server/mcp-server.js"
-      ]
+      ],
+      "env": {
+        "JAVA_NAV_BRIDGE_TIMEOUT": "20000",
+        "JAVA_NAV_REFRESH_TIMEOUT": "65000",
+        "JAVA_NAV_REFRESH_WAIT": "20000",
+        "JAVA_NAV_AUTO_CONFIG_MIN_FILES": "50",
+        "JAVA_NAV_QUIET_MS": "800"
+      }
     }
   }
 }

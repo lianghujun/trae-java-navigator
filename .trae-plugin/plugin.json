@@ -1,6 +1,6 @@
 {
   "name": "trae-java-navigator",
-  "version": "0.1.2",
+  "version": "0.1.7",
   "description": "Java symbol navigation and real-time diagnostics for Trae agents via JDT LS (LSP).",
   "author": {
     "name": "Local"

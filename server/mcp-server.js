@@ -10,6 +10,7 @@ const { pathToFileURL, fileURLToPath } = require('url');
 const { LspClient } = require('./lsp-client');
 const { findServerDir, buildArgs, findJava, findLombokJar } = require('./jdtls');
 const bridgeClient = require('./bridge-client');
+const { cleanupPendingVersions } = require('./pending-cleanup');
 const { loadJavaSettings, detectProjectJavaVersion, javaSettingsForSection } = require('./settings-reader');
 
 // ---------------------------------------------------------------------------
@@ -998,3 +999,13 @@ process.on('SIGINT', shutdown);
 process.on('exit', () => { try { client && client.stop(); } catch (_) { /* ignore */ } });
 
 log('java-navigator MCP server started; workspace will be resolved on first tool call');
+
+// 安装时删不掉的旧版本目录：此时旧 MCP 进程已退出，延迟几秒后按 pending 列表清理
+setTimeout(() => {
+  try {
+    const result = cleanupPendingVersions({ log });
+    if (result && result.removed) log('pending cleanup: removed ' + result.removed);
+  } catch (e) {
+    log('pending cleanup failed: ' + e.message);
+  }
+}, 3000).unref();

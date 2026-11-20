@@ -87,13 +87,98 @@ function pruneExtra(from, to) {
 const pluginsRoot = resolvePluginsRoot();
 const pluginParent = path.join(pluginsRoot, 'local', pluginName);
 const target = path.join(pluginParent, version);
-// 升级时只保留当前版本，避免 Trae 同时看到多个版本
-if (fs.existsSync(pluginParent)) {
-  for (const name of fs.readdirSync(pluginParent)) {
-    if (name === version) continue;
-    try { fs.rmSync(path.join(pluginParent, name), { recursive: true, force: true }); } catch (_) { /* ignore */ }
+const pendingFile = path.join(pluginParent, '.pending-cleanup.json');
+const RETIRED_PREFIX = '.old-';
+
+function normalizePath(p) {
+  try { return path.resolve(p).toLowerCase(); } catch (_) { return String(p || '').toLowerCase(); }
+}
+
+function readPending() {
+  const map = new Map();
+  try {
+    const data = JSON.parse(fs.readFileSync(pendingFile, 'utf8'));
+    for (const entry of data.pending || []) {
+      if (!entry || typeof entry.path !== 'string') continue;
+      map.set(normalizePath(entry.path), {
+        path: path.resolve(entry.path),
+        reason: entry.reason || null,
+        at: entry.at || null,
+      });
+    }
+  } catch (_) { /* 没有或损坏：从空列表开始 */ }
+  return map;
+}
+
+const pending = readPending();
+
+function markPending(dir, reason) {
+  pending.set(normalizePath(dir), {
+    path: path.resolve(dir),
+    reason: reason || null,
+    at: new Date().toISOString(),
+  });
+}
+
+// 旧版本目录：先改名（正在被进程当作 cwd 时 rename 会失败，但不会破坏内容），
+// 改名成功后再删除；改名失败则摘掉 .success 让 Trae 不再登记该版本，并记入待清理列表。
+function retireOldVersion(dir, name) {
+  const retired = path.join(pluginParent, RETIRED_PREFIX + name + '-' + Date.now());
+  try {
+    fs.renameSync(dir, retired);
+  } catch (e) {
+    try { fs.unlinkSync(path.join(dir, '.success')); } catch (_) { /* ignore */ }
+    markPending(dir, e.code || e.message);
+    return;
+  }
+  try {
+    fs.rmSync(retired, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    pending.delete(normalizePath(dir));
+  } catch (e) {
+    markPending(retired, e.code || e.message);
   }
 }
+
+if (fs.existsSync(pluginParent)) {
+  for (const entry of fs.readdirSync(pluginParent, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === version) continue;
+    const full = path.join(pluginParent, entry.name);
+    if (entry.name.startsWith(RETIRED_PREFIX)) {
+      // 上次改名后没删干净的目录，继续尝试
+      try {
+        fs.rmSync(full, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+        pending.delete(normalizePath(full));
+      } catch (e) {
+        markPending(full, e.code || e.message);
+      }
+      continue;
+    }
+    retireOldVersion(full, entry.name);
+  }
+}
+
+// 清理已不存在或已被本次安装替代的条目，并把剩余项留给新版 MCP 启动时处理
+for (const [key, entry] of [...pending]) {
+  if (!fs.existsSync(entry.path) || normalizePath(entry.path) === normalizePath(target)) {
+    pending.delete(key);
+  }
+}
+if (pending.size) {
+  try {
+    fs.writeFileSync(pendingFile, JSON.stringify({
+      current: version,
+      updatedAt: new Date().toISOString(),
+      pending: [...pending.values()],
+    }, null, 2), 'utf8');
+    console.log('以下旧版本目录暂时无法删除，已加入待清理列表（下次完全启动 Trae 时自动处理）：');
+    for (const entry of pending.values()) console.log('  ' + entry.path);
+  } catch (e) {
+    console.log('写入待清理列表失败：' + e.message);
+  }
+} else {
+  try { fs.unlinkSync(pendingFile); } catch (_) { /* ignore */ }
+}
+
 // 插件启用中时目录可能被占用（Windows EBUSY）：退化为覆盖复制
 try {
   fs.rmSync(target, { recursive: true, force: true });

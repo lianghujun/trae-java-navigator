@@ -1,9 +1,9 @@
 # JDT LS 缓存一致性技术方案
 
-> 状态：已实现（扩展 `0.1.25`、MCP 插件 `0.1.7`）
+> 状态：已实现（扩展 `0.1.29`、MCP 插件 `0.1.10`）
 > 适用仓库：`trae-java-bridge-extension`（IDE 扩展）、`trae-java-navigator`（MCP 插件）
-> 目标版本：扩展 `0.1.25`、MCP 插件 `0.1.7`
-> 最后更新：2026-11-20
+> 目标版本：扩展 `0.1.29`、MCP 插件 `0.1.10`
+> 最后更新：2026-11-21
 
 > 说明：本文档在两个仓库各存放一份，内容保持一致。扩展侧改动见 §6–§13，MCP 侧改动见 §12。
 
@@ -360,11 +360,13 @@ sequenceDiagram
 
 1. 监听发现变更文件未打开时，只记入 `projectDirty` 集合；
 2. `/diagnostics` 工作区模式返回 `needsRefresh`、`dirtySince`、`refreshHint` 与最多 20 个变化文件名；
-3. 可选：外部变更停止 2 秒后，触发一次增量构建（`java.workspace.compile`，参数 `false`）；
-4. 变更文件数达到 50（常量 `AUTO_CONFIG_MIN_FILES`）时自动升级为完整重载 `java.projectConfiguration.update`（传根目录 `pom.xml` / `build.gradle` URI），修复批量移动/重命名后的资源模型错位；
-5. 显式入口 `GET /refresh?mode=auto|build|config&timeout=`：`build` 增量编译，`config` 完整重载，`auto` 按 `projectDirty` 规模选择、构建失败时自动升级；重载以诊断变化后的静默窗口作为完成信号，超时返回 `completed=false`；
-6. 构建/重载单飞：同一时间只允许一个，期间的新变化合并到下一轮，两次刷新最小间隔 5 秒；
-7. 不自动执行全量构建，不自动清缓存。
+3. 可选：外部变更停止 2 秒后，触发一次增量构建（`java.workspace.compile`，参数 `false`）；构建返回成功只代表命令未报错，必须再等本批文件出现诊断变化（`refreshSettleMs`，默认 3 秒）才算刷新生效；
+4. 增量构建没有带来任何诊断变化时（JDT 漏掉 `didChangeWatchedFiles` 的典型表现），自动升级为完整重载 `java.projectConfiguration.update`（传根目录 `pom.xml` / `build.gradle` URI），重建资源模型与索引；新建/删除文件即使已在编辑器打开，也必须计入项目级刷新；
+5. 变更文件数达到 50（常量 `AUTO_CONFIG_MIN_FILES`）时直接使用完整重载，修复批量移动/重命名后的资源模型错位；
+6. 刷新未确认（重载等待诊断静默超时）时保留 `projectDirty`：状态栏继续显示 `待刷新(N)`，且不再自动重试，直到下一次外部变化；已从磁盘删除的文件不计入待刷新；
+7. 显式入口 `GET /refresh?mode=auto|build|config&timeout=`：`build` 增量编译，`config` 完整重载，`auto` 按 `projectDirty` 规模选择、构建失败时自动升级；重载以诊断变化后的静默窗口作为完成信号，超时返回 `completed=false`；
+8. 构建/重载单飞：同一时间只允许一个，期间的新变化合并到下一轮，两次刷新最小间隔 5 秒；只清理发起时的那一批文件，刷新期间新到的变化保持待刷新；
+9. 不自动执行全量构建，不自动清缓存。
 
 ---
 
@@ -376,7 +378,22 @@ sequenceDiagram
 {
   "scope": "file",
   "file": "...",
-  "total": 0,
+  "severity": "warning",
+  "missing": false,
+  "total": 37,
+  "allTotal": 53,
+  "summary": {
+    "bySeverity": { "warning": 37 },
+    "bySource": { "sonarqube": 37 },
+    "byLanguage": { "java": 37 },
+    "byCode": { "sonarqube:java:S1192": 26, "sonarqube:java:S3776": 1 }
+  },
+  "workspaceTotals": {
+    "total": 188,
+    "bySeverity": { "error": 8, "warning": 180 },
+    "bySource": { "Java": 8, "sonarqube": 180 },
+    "byLanguage": { "java": 40, "js": 148 }
+  },
   "items": [],
   "consistency": {
     "state": "reloaded",
@@ -389,13 +406,24 @@ sequenceDiagram
   "workspace": "..."
 }
 ```
+`total` 只统计本次 `severity` 过滤后的条目，`allTotal` 才是该文件全部级别的条目数；`summary` 由服务端直接给出计数，调用方不需要再数 `items`；`workspaceTotals` 是整个工作区的残留计数（`bySource` 区分 `Java`/`sonarqube`，`byLanguage` 区分文件类型），文件 `total=0` 不代表工作区清零。
 
 ### 12.2 工作区
 
 ```json
 {
   "scope": "project",
+  "severity": "error",
   "total": 3,
+  "allTotal": 17,
+  "skippedMissing": 0,
+  "missingFiles": [],
+  "missingTruncated": false,
+  "summary": {
+    "bySeverity": { "error": 3 },
+    "bySource": { "Java": 3 },
+    "byCode": { "Java:268435846": 2, "Java:16777218": 1 }
+  },
   "items": [],
   "consistency": {
     "state": "stale",
@@ -409,6 +437,7 @@ sequenceDiagram
   "workspace": "..."
 }
 ```
+文件被移动或删除后，JDT/Sonarqube 可能在 Problems 面板里留下指向旧路径的条目；工作区模式会过滤这些已不存在文件的诊断，并通过 `skippedMissing` / `missingFiles` 报告数量，文件模式对缺失文件返回 `missing=true`、`total=0`。面板中的幽灵条目只能由发布它的扩展清除，必要时重载窗口。
 
 ### 12.3 Agent 约定
 
@@ -446,6 +475,7 @@ sequenceDiagram
 | `traeJavaBridge.project.buildTimeoutMs` | `120000` | 增量编译超时 |
 | `traeJavaBridge.project.reloadTimeoutMs` | `15000` | 完整重载等待诊断静默的上限 |
 | `traeJavaBridge.project.reloadQuietMs` | `800` | 诊断静默窗口 |
+| `traeJavaBridge.project.refreshSettleMs` | `3000` | 增量编译后等待本批文件诊断更新的上限；无变化则升级完整重载 |
 | `traeJavaBridge.project.changedFilesLimit` | `20` | `changedFiles` 最大返回数 |
 | `traeJavaBridge.project.dirtyMaxFiles` | `2000` | `projectDirty` 最大跟踪数 |
 

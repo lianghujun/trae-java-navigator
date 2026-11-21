@@ -3,7 +3,7 @@ name: java-navigate
 description: "Use when answering: where is a Java class/method/field, which file declares it, who calls it, where does this line jump to, what is the signature, why does compilation fail, how many compile errors exist and in which files. Returns exact file:line:column for Java symbols. Prefer it when the declaring file is unknown or exact semantics matter (same-name/overload, real references). Read/Grep are cheaper for known files/positions, plain text, non-Java files, and generated/out-of-project sources. Not for renaming/refactoring, call/type/implementation hierarchies, or final build verification."
 description_zh: "当需要回答「某类/方法/字段在哪、谁调用了它、这行跳到哪、签名是什么、为什么编译报错、一共有多少错误、分布在哪些文件」时使用，返回精确的 file:line:column 与错误清单。按耗时与可信度选择：不知道声明文件、需要区分同名/重载/真实引用时，工具通常比 Grep 快 1–2 个数量级；已知文件位置读代码、纯文本、非 Java 文件、生成或工程外源码则用 Read/Grep。不覆盖重命名/重构、调用/类型/实现层次与最终构建验证。"
 description_en: "Use when answering: where is a Java class/method/field, which file declares it, who calls it, where does this line jump to, what is the signature, why does compilation fail, how many compile errors exist and in which files. Returns exact file:line:column for Java symbols. Prefer it when the declaring file is unknown or exact semantics matter (same-name/overload, real references). Read/Grep are cheaper for known files/positions, plain text, non-Java files, and generated/out-of-project sources. Not for renaming/refactoring, call/type/implementation hierarchies, or final build verification."
-version: "0.1.7"
+version: "0.1.10"
 ---
 
 # Java Navigator
@@ -27,9 +27,11 @@ version: "0.1.7"
 | 第 N 行这个调用跳到哪？ | `java_navigate {action:"definition", file, line, column}` | 位置必须落在**标识符首字符**；落在包前缀/空白/标点会返回 0 条 |
 | 谁调用了它？被哪些文件引用？ | 先取声明位置，再 `java_navigate {action:"references", file, line, column, limit:200}` | 看 `count` 与 `truncated`；>500 条先截断或改用 Grep |
 | 这个方法的签名/参数是什么？ | `java_navigate {action:"hover", file, line, column}` | 目标在依赖 jar 内时尤其有用 |
-| 为什么编译报错？错误有多少、分布在哪些文件？ | `java_diagnostics {severity:"error", limit:100}` | 返回 `total` 以及每条 `file/line/column/severity/code/message`；可按 `file` 聚合出“哪些文件、各多少条” |
+| 为什么编译报错？错误有多少、分布在哪些文件？ | `java_diagnostics {severity:"error", limit:100}` | 返回 `total`/`allTotal`/`summary` 以及每条 `file/line/column/severity/code/message`；按 `summary.bySource`/`file` 聚合出“哪些文件、各多少条” |
 | 这个文件有哪些错误/警告？ | `java_diagnostics {file:"...", severity:"all", limit:200}` | 单文件默认查全部级别；工作区默认只查 error |
 | 项目模型陈旧、批量移动/重命名文件后诊断不对 | `java_diagnostics {refresh:"auto"}`；仍陈旧用 `{refresh:"config"}` | 不要修改 pom.xml 时间戳；refresh 才会真正触发 JDT 重载 |
+| 确认警告/错误是否真的清完 | 文件模式看 `workspaceTotals`，或不带 file 跑工作区模式 | 文件 `total=0` 只代表该文件；用 `summary.bySource` 区分 `sonarqube` 与 `Java`（unused import、Timestamp 类型不匹配等属于 Java/JDT） |
+| 文件被移动/删除后，工具报“文件不存在” | 改用 `java_search {mode:"workspace", query:"类名"}` 找新位置 | 路径可写绝对路径、相对工作区，或“工程目录名/相对路径”；文件模式诊断对已删除文件返回 `missing:true` |
 | 工具能用吗？索引好了吗？ | `java_status {}` / `{warmup:true}` | `warmup` 只对独立 JDT LS 有效；桥接模式看 `sync.projectDirty`，陈旧用 `refresh` |
 
 ## 调用模板（可直接照抄，替换文件名与行列）
@@ -67,7 +69,7 @@ version: "0.1.7"
 - `java_navigate definition` → `count`、`items`（额外带 `text` 源码行）、`summary`。
 - `java_navigate references` → `count`（总数）、`returned`（实际条数）、`truncated`、`items[{file,line,column,endLine,endColumn}]`、`summary`。
 - `java_navigate hover` → `text`（签名/文档）与 `range`。
-- `java_diagnostics` → `total`；文件模式有 `file`，工作区模式 `items[{file,line,column,severity,message,source,code}]` 按文件排序。
+- `java_diagnostics` → `total`（本次 severity 过滤后的条目数）、`allTotal`（全部级别条目数）、`summary.bySeverity/bySource/byLanguage/byCode`（计数）；文件模式额外有 `workspaceTotals`（整个工作区按 severity/source/language 的残留计数）；文件模式有 `file`，工作区模式 `items[{file,line,column,severity,message,source,code}]` 按文件排序。报数用 `total` 和 `summary`，不要自行统计 `items` 行数（受 limit 截断影响）。
 - `java_diagnostics`（桥接模式）→ 额外返回 `consistency`（一致性状态，见下节）；工作区模式的 `consistency` 含 `needsRefresh` / `changedFiles` / `truncated`。
 - `java_status` → `source`（`ide-bridge` = 复用 IDE 索引；`standalone-jdtls` = MCP 自己启动的 JDT LS）、`status`、`ready`、`bridgeError`、`projectJavaVersion`、`lombok`、`sync`（桥接同步统计）等。
 
@@ -160,5 +162,6 @@ version: "0.1.7"
 - 工具只读，不修改文件、不执行构建。
 - 位置以 IDE 编辑器当前内容为准（含未保存修改）；用磁盘文件推算行号时可能偏移。
 - 诊断范围：桥接 = IDE 当前已分析的文件（与编辑器里显示的实时错误/警告一致）；独立 = JDT 已发布的诊断，可能不全。两者都不是全仓库静态扫描；最终以构建结果为准。
+- 文件被移动或删除后，索引与 Problems 面板可能残留旧路径：工具会过滤掉不存在文件的幽灵诊断（`skippedMissing`/`missingFiles`），但面板条目由发布它的扩展持有，彻底清掉需要重载 IDE 窗口。
 - 诊断不能替代编译门禁：Lombok/注解处理器与 Maven 不完全等价，最终仍需 `mvnw -DskipTests test-compile`。
 - 触发关键词：定义、跳转、引用、调用方、类在哪、方法在哪、字段、签名、编译错误、报错、找不到符号、go to definition、find references、usages、workspace symbol、diagnostics。

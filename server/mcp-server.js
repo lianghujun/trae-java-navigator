@@ -300,11 +300,30 @@ async function startClient() {
 // ---------------------------------------------------------------------------
 // 文件 / 位置工具
 // ---------------------------------------------------------------------------
+// 相对路径兼容两种常见写法：相对工作区根，或“工程目录名/相对路径”（工作区本身就是工程根时）
+function fileCandidates(file) {
+  if (path.isAbsolute(file)) return [file];
+  const root = ensureWorkspace();
+  const out = [path.resolve(root, file)];
+  const base = path.basename(root);
+  const normalized = String(file).replace(/\\/g, '/');
+  if (normalized === base || normalized.startsWith(base + '/')) {
+    const rest = normalized.slice(base.length).replace(/^\/+/, '');
+    out.push(path.resolve(root, rest || '.'));
+  }
+  out.push(path.resolve(path.dirname(root), file));
+  return [...new Set(out)];
+}
+
 function absoluteFile(file) {
   if (!file) throw new Error('缺少 file 参数');
-  const p = path.isAbsolute(file) ? file : path.resolve(ensureWorkspace(), file);
-  if (!fs.existsSync(p)) throw new Error('文件不存在: ' + p);
-  return p;
+  const candidates = fileCandidates(file);
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  throw new Error('文件不存在: ' + candidates[0]
+    + (candidates[1] && candidates[1] !== candidates[0] ? '（也未找到 ' + candidates[1] + '）' : '')
+    + '。文件可能已被移动或删除，可改用 java_search 按符号名定位新位置。');
 }
 
 function toUri(file) {
@@ -391,6 +410,52 @@ function filterDiagnostics(list, severity) {
   if (!severity || severity === 'all') return list;
   const wanted = String(severity).toLowerCase();
   return list.filter((d) => severityName(d.severity) === wanted);
+}
+
+// 与桥接端保持同一口径：total 只统计本次返回的条目，allTotal 才是全部级别
+function languageOf(file) {
+  const base = String(file || '');
+  const i = base.lastIndexOf('.');
+  return i > -1 ? base.slice(i + 1).toLowerCase() : 'unknown';
+}
+
+function summarizeDiagnostics(items) {
+  const bySeverity = {};
+  const bySource = {};
+  const byLanguage = {};
+  const byCode = {};
+  for (const d of items) {
+    const source = d.source || 'unknown';
+    bySeverity[d.severity] = (bySeverity[d.severity] || 0) + 1;
+    bySource[source] = (bySource[source] || 0) + 1;
+    const lang = languageOf(d.file);
+    byLanguage[lang] = (byLanguage[lang] || 0) + 1;
+    const key = source + (d.code ? ':' + d.code : '');
+    byCode[key] = (byCode[key] || 0) + 1;
+  }
+  return { bySeverity, bySource, byLanguage, byCode };
+}
+
+// 独立模式下同样给出工作区残留计数（只覆盖已推送诊断的文件）
+function workspaceDiagnosticTotals() {
+  const all = [];
+  for (const [uri, entry] of diagnosticsByUri.entries()) {
+    for (const d of entry.diagnostics || []) {
+      all.push({
+        file: fromUri(uri),
+        severity: severityName(d.severity),
+        source: d.source || '',
+        code: d.code || '',
+      });
+    }
+  }
+  const summary = summarizeDiagnostics(all);
+  return {
+    total: all.length,
+    bySeverity: summary.bySeverity,
+    bySource: summary.bySource,
+    byLanguage: summary.byLanguage,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -694,13 +759,33 @@ function collectDiagnostics(severity, limit) {
   }
   const filtered = filterDiagnostics(items, severity);
   filtered.sort((a, b) => String(a.file).localeCompare(String(b.file)) || (a.line || 0) - (b.line || 0));
-  return { total: filtered.length, items: filtered.slice(0, Math.min(limit || 200, 1000)) };
+  return {
+    total: filtered.length,
+    allTotal: items.length,
+    summary: summarizeDiagnostics(filtered),
+    items: filtered.slice(0, Math.min(limit || 200, 1000)),
+  };
 }
 
 async function fileDiagnostics(args) {
   const bridged = await viaBridge('fileDiagnostics', args);
   if (bridged) return bridged;
-  const file = absoluteFile(args.file);
+  let file;
+  try {
+    file = absoluteFile(args.file);
+  } catch (e) {
+    return {
+      file: args.file,
+      source: 'standalone-jdtls',
+      missing: true,
+      total: 0,
+      allTotal: 0,
+      summary: summarizeDiagnostics([]),
+      workspaceTotals: workspaceDiagnosticTotals(),
+      items: [],
+      note: e.message,
+    };
+  }
   const uri = await ensureOpen(file);
   // 等待 JDT LS 推送诊断
   for (let i = 0; i < 20 && !diagnosticsByUri.has(uri); i++) {
@@ -716,7 +801,15 @@ async function fileDiagnostics(args) {
     source: d.source || '',
   }));
   const filtered = filterDiagnostics(items, args.severity);
-  return { file, source: 'standalone-jdtls', total: filtered.length, items: filtered };
+  return {
+    file,
+    source: 'standalone-jdtls',
+    total: filtered.length,
+    allTotal: items.length,
+    summary: summarizeDiagnostics(filtered),
+    workspaceTotals: workspaceDiagnosticTotals(),
+    items: filtered,
+  };
 }
 
 async function projectDiagnostics(args) {
@@ -751,6 +844,8 @@ async function projectDiagnostics(args) {
       source: 'standalone-jdtls',
       indexStatus,
       total: filtered.length,
+      allTotal: items.length,
+      summary: summarizeDiagnostics(filtered),
       items: filtered.slice(0, limit),
     };
   } catch (e) {
@@ -1001,7 +1096,7 @@ const TOOLS = [
         },
         file: {
           type: 'string',
-          description: 'mode=file 或 outline 时必填。绝对路径或相对 Java 工程根路径。例：src/main/java/com/example/OrderService.java',
+          description: 'mode=file 或 outline 时必填。绝对路径，或相对工作区的路径；也可写成“工程目录名/相对路径”。文件被移动或删除时会提示不存在，可改用 mode=workspace 按符号名定位新位置。例：src/main/java/com/example/OrderService.java',
         },
         name: {
           type: 'string',
@@ -1059,7 +1154,7 @@ const TOOLS = [
   },
   {
     name: 'java_diagnostics',
-    description: '读取 IDE 中 JDT LS 的实时编译错误/警告，替代反复执行 Maven 做快速反馈。给 file 查单文件（默认全部级别）；不给 file 查整个工作区（默认只查 error），返回 total 与每条 file/line/column/severity/code/message。适合：cannot be resolved、找不到符号、类型不匹配、import 报错、查看错误分布。不适合：最终编译门禁（仍需 mvn/mvnw test-compile）、非 Java 文件 lint、依赖/配置问题。桥接模式附带 consistency：current/reloaded 可直接使用；dirty（有未保存修改）与 unknown（检查失败）不要据此下结论；工作区 needsRefresh=true 表示项目模型滞后，用 refresh:"auto" 刷新后重查，仍陈旧用 refresh:"config" 强制完整重载。',
+    description: '读取 IDE 中 JDT LS 的实时编译错误/警告，替代反复执行 Maven 做快速反馈。给 file 查单文件（默认全部级别）；不给 file 查整个工作区（默认只查 error）。返回 total（本次 severity 过滤后的条目数，与 Problems 面板同级别条数一致）、allTotal（全部级别条数）、summary（按 severity/source/language/code 的计数）以及每条 file/line/column/severity/code/message。文件模式还返回 workspaceTotals（整个工作区按 severity/source/language 的残留计数）：文件 total=0 只说明该文件干净，不代表工作区清零；汇报“警告/错误已全部解决”前必须看 workspaceTotals 或用工作区模式复查，并区分 source（sonarqube 与 Java/JDT 是两套问题，unused import 等属于 Java）。文件已被移动或删除时返回 missing:true（total=0）而不是报错；工作区模式会过滤这些已不存在文件的幽灵诊断，并在 skippedMissing/missingFiles 中报告，IDE Problems 面板可能仍显示它们，重载窗口可清除。报数一律用 total/summary/workspaceTotals，不要自行统计 items 行数。适合：cannot be resolved、找不到符号、类型不匹配、import 报错、查看错误分布。不适合：最终编译门禁（仍需 mvn/mvnw test-compile）、非 Java 文件 lint、依赖/配置问题。桥接模式附带 consistency：current/reloaded 可直接使用；dirty（有未保存修改）与 unknown（检查失败）不要据此下结论；工作区 needsRefresh=true 表示项目模型滞后，用 refresh:"auto" 刷新后重查，仍陈旧用 refresh:"config" 强制完整重载。',
     inputSchema: {
       type: 'object',
       properties: {

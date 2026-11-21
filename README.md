@@ -1,7 +1,7 @@
 # Trae Java Navigator
 
 <p align="center">
-  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.7-2F6FEB?style=flat-square" alt="version"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.10-2F6FEB?style=flat-square" alt="version"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/server/mcp-server.js"><img src="https://img.shields.io/badge/MCP%20tools-4-2F6FEB?style=flat-square" alt="MCP tools"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/tree/main/skills"><img src="https://img.shields.io/badge/Skill-1-2F6FEB?style=flat-square" alt="skill"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator#平台兼容"><img src="https://img.shields.io/badge/platform-Trae%20plugin%20%7C%20MCP%20any%20client-6A5ACD?style=flat-square" alt="platform"/></a>
@@ -201,7 +201,21 @@ GET /hover?file=&line=&column=
 ```json
 {
   "scope": "file",
-  "total": 0,
+  "severity": "warning",
+  "total": 37,
+  "allTotal": 53,
+  "summary": {
+    "bySeverity": { "warning": 37 },
+    "bySource": { "sonarqube": 37 },
+    "byLanguage": { "java": 37 },
+    "byCode": { "sonarqube:java:S1192": 26 }
+  },
+  "workspaceTotals": {
+    "total": 188,
+    "bySeverity": { "error": 8, "warning": 180 },
+    "bySource": { "Java": 8, "sonarqube": 180 },
+    "byLanguage": { "java": 40, "js": 148 }
+  },
   "items": [],
   "consistency": {
     "state": "reloaded",
@@ -212,6 +226,8 @@ GET /hover?file=&line=&column=
   }
 }
 ```
+
+`total` 只统计本次 `severity` 过滤后的条目，`allTotal` 是全部级别；`summary` 直接给出按 severity/source/language/code 的计数，AI 报数应以它们为准，不要自己数 `items`。`workspaceTotals` 是整个工作区的残留计数：文件 `total=0` 只代表该文件，说“全部解决”前要看这里或再跑一次工作区模式。已删除/移动文件留下的幽灵诊断会被过滤（`skippedMissing` / `missingFiles`），文件模式查询缺失文件返回 `missing:true` 而不是报错。
 
 工作区模式返回 `consistency.state` / `needsRefresh` / `changedFiles` / `truncated`。`/health` 额外返回 `sync`（`reloadedCount`、`dirtyConflicts`、`skipped`、`circuitBroken`、`lastSyncAt`、`projectDirty` 等）。
 

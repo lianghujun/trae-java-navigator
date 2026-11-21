@@ -1,7 +1,7 @@
 # Trae Java Navigator
 
 <p align="center">
-  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.7-2F6FEB?style=flat-square" alt="version"/></a>
+  <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/.trae-plugin/plugin.json"><img src="https://img.shields.io/badge/version-v0.1.10-2F6FEB?style=flat-square" alt="version"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/blob/main/server/mcp-server.js"><img src="https://img.shields.io/badge/MCP%20tools-4-2F6FEB?style=flat-square" alt="MCP tools"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator/tree/main/skills"><img src="https://img.shields.io/badge/Skill-1-2F6FEB?style=flat-square" alt="skill"/></a>
   <a href="https://github.com/lianghujun/trae-java-navigator#platform-compatibility"><img src="https://img.shields.io/badge/platform-Trae%20plugin%20%7C%20MCP%20any%20client-6A5ACD?style=flat-square" alt="platform"/></a>
@@ -201,7 +201,21 @@ GET /hover?file=&line=&column=
 ```json
 {
   "scope": "file",
-  "total": 0,
+  "severity": "warning",
+  "total": 37,
+  "allTotal": 53,
+  "summary": {
+    "bySeverity": { "warning": 37 },
+    "bySource": { "sonarqube": 37 },
+    "byLanguage": { "java": 37 },
+    "byCode": { "sonarqube:java:S1192": 26 }
+  },
+  "workspaceTotals": {
+    "total": 188,
+    "bySeverity": { "error": 8, "warning": 180 },
+    "bySource": { "Java": 8, "sonarqube": 180 },
+    "byLanguage": { "java": 40, "js": 148 }
+  },
   "items": [],
   "consistency": {
     "state": "reloaded",
@@ -212,6 +226,8 @@ GET /hover?file=&line=&column=
   }
 }
 ```
+
+`total` counts only items after the `severity` filter; `allTotal` covers every severity. `summary` gives counts by severity/source/language/code — quote those instead of counting `items`. `workspaceTotals` is the workspace-wide residue: a file `total=0` only means that file is clean, so check it (or re-query at workspace scope) before claiming everything is resolved. Diagnostics pointing at deleted/moved files are filtered out (`skippedMissing` / `missingFiles`), and file mode returns `missing:true` instead of an error when the file is gone.
 
 Workspace mode returns `consistency.state` / `needsRefresh` / `changedFiles` / `truncated`. `/health` additionally returns `sync` (`reloadedCount`, `dirtyConflicts`, `skipped`, `circuitBroken`, `lastSyncAt`, `projectDirty`, and more).
 
